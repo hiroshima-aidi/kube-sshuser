@@ -2,165 +2,144 @@
 
 import argparse
 import os
-import subprocess
-import sys
-import textwrap
+import time
+
+from .gpu_dev_core import DEFAULT_CPU_LIMIT
+from .gpu_dev_core import DEFAULT_CPU_REQUEST
+from .gpu_dev_core import DEFAULT_GPU
+from .gpu_dev_core import DEFAULT_IMAGE
+from .gpu_dev_core import DEFAULT_MEMORY_LIMIT
+from .gpu_dev_core import DEFAULT_MEMORY_REQUEST
+from .gpu_dev_core import DEFAULT_MOUNT_PATH
+from .gpu_dev_core import DEFAULT_NODE_LABEL_KEY
+from .gpu_dev_core import DEFAULT_NODE_LABEL_VALUE
+from .gpu_dev_core import DEFAULT_PVC
+from .gpu_dev_core import DEFAULT_RUNTIME_CLASS
+from .gpu_dev_core import DEFAULT_TTL
+from .gpu_dev_core import build_owner
+from .gpu_dev_core import build_pod_name
+from .gpu_dev_core import delete_all_pods
+from .gpu_dev_core import delete_pod
+from .gpu_dev_core import ensure_pod
+from .gpu_dev_core import get_namespace_or_exit
+from .gpu_dev_core import list_pods
+from .gpu_dev_core import run
+from .gpu_dev_core import start_port_forward
+from .gpu_dev_core import stop_process
+from .gpu_dev_core import validate_forwards
 
 
-def run(cmd, env=None, check=True):
-    print(f"[cmd] {' '.join(cmd)}")
-    return subprocess.run(cmd, env=env, check=check)
-
-
-def kubectl_apply(namespace: str, manifest: str, env=None):
-    proc = subprocess.Popen(
-        ["kubectl", "-n", namespace, "apply", "--validate=false", "-f", "-"],
-        stdin=subprocess.PIPE,
-        text=True,
-        env=env,
-    )
-    proc.communicate(manifest)
-    if proc.returncode != 0:
-        raise SystemExit(proc.returncode)
-
-
-def sanitize_k8s_name(value: str) -> str:
-    value = value.lower()
-    out = []
-    last_dash = False
-    for ch in value:
-        if ch.isalnum():
-            out.append(ch)
-            last_dash = False
-        else:
-            if not last_dash:
-                out.append("-")
-                last_dash = True
-    normalized = "".join(out).strip("-")
-    return normalized or "user"
-
-
-def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        description="Launch an interactive GPU dev pod using in-cluster ServiceAccount auth."
+        description="Create or attach to an interactive GPU dev pod using in-cluster ServiceAccount auth."
     )
-    parser.add_argument("--ttl", type=int, default=3600, help="Pod lifetime in seconds")
-    parser.add_argument("--gpu", type=int, default=1, help="Number of GPUs")
+    parser.add_argument("--ttl", type=int, default=DEFAULT_TTL, help="Pod lifetime in seconds")
+    parser.add_argument("--gpu", type=int, default=DEFAULT_GPU, help="Number of GPUs")
     parser.add_argument(
         "--image",
-        default="nvidia/cuda:12.2.0-runtime-ubuntu22.04",
+        default=DEFAULT_IMAGE,
         help="Container image",
     )
-    parser.add_argument("--name", default=None, help="Pod name")
-    parser.add_argument("--pvc", default="workspace", help="PVC name to mount")
-    parser.add_argument("--mount-path", default="/workspace", help="PVC mount path")
-    parser.add_argument("--runtime-class", default="nvidia", help="RuntimeClass name")
-    parser.add_argument("--node-label-key", default="gpu", help="Node selector key")
-    parser.add_argument("--node-label-value", default="true", help="Node selector value")
-    parser.add_argument("--cpu-request", default="2", help="CPU request")
-    parser.add_argument("--cpu-limit", default="4", help="CPU limit")
-    parser.add_argument("--memory-request", default="8Gi", help="Memory request")
-    parser.add_argument("--memory-limit", default="16Gi", help="Memory limit")
+    parser.add_argument(
+        "--name",
+        default=None,
+        help="Logical pod name. Example: --name test1 -> gpu-dev-<owner>-test1",
+    )
+    parser.add_argument("--pvc", default=DEFAULT_PVC, help="PVC name to mount")
+    parser.add_argument("--mount-path", default=DEFAULT_MOUNT_PATH, help="PVC mount path")
+    parser.add_argument("--runtime-class", default=DEFAULT_RUNTIME_CLASS, help="RuntimeClass name")
+    parser.add_argument("--node-label-key", default=DEFAULT_NODE_LABEL_KEY, help="Node selector key")
+    parser.add_argument(
+        "--node-label-value", default=DEFAULT_NODE_LABEL_VALUE, help="Node selector value"
+    )
+    parser.add_argument("--cpu-request", default=DEFAULT_CPU_REQUEST, help="CPU request")
+    parser.add_argument("--cpu-limit", default=DEFAULT_CPU_LIMIT, help="CPU limit")
+    parser.add_argument("--memory-request", default=DEFAULT_MEMORY_REQUEST, help="Memory request")
+    parser.add_argument("--memory-limit", default=DEFAULT_MEMORY_LIMIT, help="Memory limit")
     parser.add_argument(
         "--keep",
         action="store_true",
-        help="Keep the pod after exiting instead of deleting it",
+        help="Keep the pod after exiting instead of deleting it (only applies when newly created)",
     )
+    parser.add_argument(
+        "--forward",
+        action="append",
+        default=[],
+        help="Port forward (format: local:remote). Can be specified multiple times.",
+    )
+    parser.add_argument(
+        "--list",
+        action="store_true",
+        help="List my gpu-dev pods and exit",
+    )
+    parser.add_argument(
+        "--delete",
+        action="store_true",
+        help="Delete the target gpu-dev pod and exit",
+    )
+    parser.add_argument(
+        "--delete-all",
+        action="store_true",
+        help="Delete all my gpu-dev pods and exit",
+    )
+    return parser
 
+
+def handle_immediate_actions(args, namespace: str, owner: str, pod_name: str, env=None) -> bool:
+    if args.list:
+        list_pods(namespace, owner, env=env)
+        return True
+
+    if args.delete_all:
+        delete_all_pods(namespace, owner, env=env)
+        return True
+
+    if args.delete:
+        delete_pod(namespace, pod_name, env=env)
+        return True
+
+    return False
+
+
+def main():
+    parser = build_parser()
     args = parser.parse_args()
 
-    namespace = os.environ.get("K8S_NAMESPACE")
-    if not namespace:
-        print("K8S_NAMESPACE is required", file=sys.stderr)
-        sys.exit(1)
+    namespace = get_namespace_or_exit()
 
-    invoking_user = (
-        os.environ.get("USER")
-        or os.environ.get("LOGNAME")
-        or "user"
-    )
-    owner = sanitize_k8s_name(invoking_user)
-    pod_name = args.name or f"gpu-dev-{owner}"
+    owner = build_owner()
+    pod_name = build_pod_name(owner, args.name)
 
     env = os.environ.copy()
     env.pop("KUBECONFIG", None)
 
-    manifest = textwrap.dedent(f"""\
-        apiVersion: v1
-        kind: Pod
-        metadata:
-          name: {pod_name}
-          labels:
-            app: gpu-dev
-            owner: {owner}
-        spec:
-          restartPolicy: Never
-          runtimeClassName: {args.runtime_class}
-          nodeSelector:
-            {args.node_label_key}: "{args.node_label_value}"
-          containers:
-            - name: dev
-              image: {args.image}
-              workingDir: {args.mount_path}
-              command: ["/bin/bash", "-lc", "sleep {args.ttl}"]
-              tty: true
-              stdin: true
-              resources:
-                requests:
-                  cpu: "{args.cpu_request}"
-                  memory: "{args.memory_request}"
-                limits:
-                  cpu: "{args.cpu_limit}"
-                  memory: "{args.memory_limit}"
-                  nvidia.com/gpu: {args.gpu}
-              volumeMounts:
-                - name: workspace
-                  mountPath: {args.mount_path}
-          volumes:
-            - name: workspace
-              persistentVolumeClaim:
-                claimName: {args.pvc}
-    """)
+    if handle_immediate_actions(args, namespace, owner, pod_name, env=env):
+        return
 
+    forwards = validate_forwards(args.forward)
+
+    pf_proc = None
     created = False
-    try:
-        kubectl_apply(namespace, manifest, env=env)
-        created = True
 
-        run(
-            [
-                "kubectl",
-                "-n",
-                namespace,
-                "wait",
-                "--for=condition=Ready",
-                f"pod/{pod_name}",
-                "--timeout=180s",
-            ],
-            env=env,
-        )
+    try:
+        created = ensure_pod(namespace, pod_name, owner, args, env=env)
+
+        pf_proc = start_port_forward(namespace, pod_name, forwards, env=env)
+        if pf_proc:
+            time.sleep(1)
 
         run(
             ["kubectl", "-n", namespace, "exec", "-it", pod_name, "--", "bash"],
             env=env,
             check=False,
         )
+
     finally:
+        stop_process(pf_proc, "port-forward")
+
         if created and not args.keep:
             print("[gpu-dev] deleting pod...")
-            run(
-                [
-                    "kubectl",
-                    "-n",
-                    namespace,
-                    "delete",
-                    "pod",
-                    pod_name,
-                    "--ignore-not-found",
-                ],
-                env=env,
-                check=False,
-            )
+            delete_pod(namespace, pod_name, env=env)
 
 
 if __name__ == "__main__":
