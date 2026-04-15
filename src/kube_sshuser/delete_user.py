@@ -9,7 +9,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from admin_tool.registry import append_event, build_operation_id, update_user_record, utcnow_iso
+from kube_sshuser.registry import append_event, build_operation_id, update_user_record, utcnow_iso
 
 
 def run(cmd, check=True, capture_output=True):
@@ -84,7 +84,7 @@ def parse_args(argv=None):
     )
     p.add_argument("--user", required=True, help="logical username, e.g. taro")
     p.add_argument("--namespace", default=None, help="override namespace")
-    p.add_argument("--out-dir", default="./out", help="base output directory")
+    p.add_argument("--out-dir", default="./output", help="base output directory")
 
     p.add_argument(
         "--keep-namespace",
@@ -94,7 +94,7 @@ def parse_args(argv=None):
     p.add_argument(
         "--keep-files",
         action="store_true",
-        help="do not delete out/<user> generated files",
+        help="do not delete output/<user> generated files",
     )
     p.add_argument(
         "--yes",

@@ -4,8 +4,8 @@ import argparse
 import json
 import sys
 
-from admin_tool import delete_user, provision_user
-from admin_tool.registry import list_user_records, load_user_record
+from kube_sshuser import delete_user, provision_user
+from kube_sshuser.registry import list_user_records, load_user_record
 
 
 def _fmt(value):
@@ -125,7 +125,7 @@ def list_users(args):
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        prog="admin-tool",
+        prog="kube-sshuser",
         description="Admin CLI for managing SSH users on Kubernetes.",
     )
 
@@ -163,7 +163,7 @@ def parse_args(argv=None):
     show.add_argument("user", help="logical username, e.g. taro")
     show.add_argument(
         "--out-dir",
-        default="./out",
+        default="./output",
         help="base output directory used by create/delete",
     )
     show.add_argument(
@@ -179,7 +179,7 @@ def parse_args(argv=None):
     )
     list_cmd.add_argument(
         "--out-dir",
-        default="./out",
+        default="./output",
         help="base output directory used by create/delete",
     )
     list_cmd.add_argument(

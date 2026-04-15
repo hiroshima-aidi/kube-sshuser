@@ -8,7 +8,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from admin_tool.registry import (
+from kube_sshuser.registry import (
     append_event,
     build_operation_id,
     extract_public_key_metadata,
@@ -403,7 +403,7 @@ def parse_args(argv=None):
     p.add_argument("--ssh-memory-limit", default="1Gi", help="ssh pod memory limit")
 
     p.add_argument("--namespace", default=None, help="override namespace")
-    p.add_argument("--out-dir", default="./out", help="output directory")
+    p.add_argument("--out-dir", default="./output", help="output directory")
 
     p.add_argument("--login-node-label-key", default="role", help="node label key for login server")
     p.add_argument("--login-node-label-value", default="login-server", help="node label value for login server")

@@ -3,13 +3,13 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "admin-tool"
+name = "kube-sshuser"
 version = "0.1.0"
 description = "Admin tools for provisioning user SSH containers and Kubernetes resources"
 requires-python = ">=3.9"
 
 [project.scripts]
-admin-tool = "admin_tool.cli:main"
+kube-sshuser = "kube_sshuser.cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
