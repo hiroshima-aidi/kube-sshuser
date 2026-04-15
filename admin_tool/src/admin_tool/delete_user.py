@@ -3,8 +3,8 @@
 import argparse
 import json
 import re
-import shlex
 import shutil
+import shlex
 import subprocess
 import sys
 from pathlib import Path
@@ -35,16 +35,28 @@ def normalize_name(value: str) -> str:
     value = value.strip("-")
     if not value:
         raise ValueError("normalized name became empty")
+    if len(value) > 63:
+        value = value[:63].rstrip("-")
+    if not value:
+        raise ValueError("normalized name became empty after truncation")
     return value
 
 
-def docker_rm_if_exists(name: str) -> bool:
-    result = run(["docker", "rm", "-f", name], check=False)
+def namespace_exists(namespace: str) -> bool:
+    result = run(
+        ["kubectl", "get", "namespace", namespace],
+        check=False,
+        capture_output=True,
+    )
     return result.returncode == 0
 
 
 def kubectl_delete_namespace(namespace: str) -> bool:
-    result = run(["kubectl", "delete", "namespace", namespace], check=False)
+    result = run(
+        ["kubectl", "delete", "namespace", namespace],
+        check=False,
+        capture_output=False,
+    )
     return result.returncode == 0
 
 
@@ -70,18 +82,12 @@ def parse_args():
     )
     p.add_argument("--user", required=True, help="logical username, e.g. taro")
     p.add_argument("--namespace", default=None, help="override namespace")
-    p.add_argument("--container-name", default=None, help="override docker container name")
     p.add_argument("--out-dir", default="./out", help="base output directory")
 
     p.add_argument(
         "--keep-namespace",
         action="store_true",
         help="do not delete Kubernetes namespace",
-    )
-    p.add_argument(
-        "--keep-container",
-        action="store_true",
-        help="do not delete Docker container",
     )
     p.add_argument(
         "--keep-files",
@@ -101,17 +107,16 @@ def main():
 
     username = normalize_name(args.user)
     namespace = args.namespace or normalize_name(f"ns-{username}")
-    container_name = args.container_name or normalize_name(f"ssh-{username}")
     output_dir = (Path(args.out_dir) / username).resolve()
 
     summary = {
         "user": username,
         "namespace": namespace,
-        "container_name": container_name,
         "output_dir": str(output_dir),
-        "delete_container": not args.keep_container,
         "delete_namespace": not args.keep_namespace,
         "delete_files": not args.keep_files,
+        "namespace_exists": namespace_exists(namespace) if not args.keep_namespace else None,
+        "output_dir_exists": output_dir.exists() if not args.keep_files else None,
     }
 
     print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -119,21 +124,16 @@ def main():
     confirm_or_exit("Proceed with deletion?", args.yes)
 
     deleted = {
-        "container_deleted": None,
         "namespace_deleted": None,
         "files_deleted": None,
     }
 
-    if not args.keep_container:
-        print("[1/3] deleting docker container...", file=sys.stderr)
-        deleted["container_deleted"] = docker_rm_if_exists(container_name)
-
     if not args.keep_namespace:
-        print("[2/3] deleting namespace...", file=sys.stderr)
+        print("[1/2] deleting namespace...", file=sys.stderr)
         deleted["namespace_deleted"] = kubectl_delete_namespace(namespace)
 
     if not args.keep_files:
-        print("[3/3] deleting generated files...", file=sys.stderr)
+        print("[2/2] deleting generated files...", file=sys.stderr)
         deleted["files_deleted"] = delete_output_dir(output_dir)
 
     result = {

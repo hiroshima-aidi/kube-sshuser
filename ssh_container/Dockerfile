@@ -46,9 +46,9 @@ RUN rm -f /usr/sbin/policy-rc.d
 
 RUN curl -fsSL -o /usr/local/bin/kubectl https://dl.k8s.io/release/v1.34.1/bin/linux/amd64/kubectl && \
     chown root:root /usr/local/bin/kubectl && \
-    chmod 750 /usr/local/bin/kubectl
+    chmod 755 /usr/local/bin/kubectl
 
-RUN mkdir -p /var/run/sshd /etc/kube
+RUN mkdir -p /var/run/sshd
 
 COPY --from=builder /build/dist/*.whl /tmp/
 
@@ -70,9 +70,6 @@ ENV SSH_PASSWORD_VALUE=
 ENV SSH_PUBLIC_KEY=
 
 ENV K8S_NAMESPACE=
-ENV K8S_SERVER=
-ENV K8S_CA_CERT_B64=
-ENV K8S_ADMIN_KUBECONFIG=/etc/kube/admin.kubeconfig
 
 EXPOSE 22
 

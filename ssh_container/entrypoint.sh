@@ -1,11 +1,10 @@
 #!/bin/bash
 set -euo pipefail
 
-SSH_HOME="/home/${SSH_USER}"
-
 ensure_line() {
   local line="$1"
   local file="$2"
+  touch "$file"
   grep -qxF "$line" "$file" || echo "$line" >> "$file"
 }
 
@@ -19,32 +18,62 @@ normalize_namespace() {
     | sed 's/-$//'
 }
 
-# K8S_NAMESPACE が未指定なら SSH_USER から自動生成
+require_env() {
+  local name="$1"
+  if [ -z "${!name:-}" ]; then
+    echo "[entrypoint] error: required env ${name} is not set" >&2
+    exit 1
+  fi
+}
+
+append_or_replace_export() {
+  local name="$1"
+  local value="$2"
+  local file="$3"
+
+  touch "$file"
+  if grep -q "^export ${name}=" "$file" 2>/dev/null; then
+    sed -i "s|^export ${name}=.*$|export ${name}=${value}|" "$file"
+  else
+    echo "export ${name}=${value}" >> "$file"
+  fi
+}
+
+append_if_missing() {
+  local line="$1"
+  local file="$2"
+  touch "$file"
+  grep -qxF "$line" "$file" || echo "$line" >> "$file"
+}
+
+require_env SSH_USER
+require_env SSH_UID
+require_env SSH_GID
+
+SSH_GROUP="${SSH_GROUP:-$SSH_USER}"
+SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-}"
+SSH_HOME="/home/${SSH_USER}"
+
 if [ -z "${K8S_NAMESPACE:-}" ]; then
   K8S_NAMESPACE="$(normalize_namespace "ns-${SSH_USER}")"
 fi
 export K8S_NAMESPACE
 
-# グループ作成
 if ! getent group "$SSH_GROUP" > /dev/null; then
   groupadd -g "$SSH_GID" "$SSH_GROUP"
 fi
 
-# ユーザ作成
 if ! id "$SSH_USER" > /dev/null 2>&1; then
   useradd -m -d "$SSH_HOME" -u "$SSH_UID" -g "$SSH_GID" -s /bin/bash "$SSH_USER"
 fi
 
-# パスワード設定
-if [ "${SSH_PASSWORD_ENABLED}" = "yes" ] && [ -n "${SSH_PASSWORD_VALUE}" ]; then
+mkdir -p "$SSH_HOME"
+chmod 755 "$SSH_HOME"
+
+if [ "${SSH_PASSWORD_ENABLED:-no}" = "yes" ] && [ -n "${SSH_PASSWORD_VALUE:-}" ]; then
   echo "${SSH_USER}:$(echo "${SSH_PASSWORD_VALUE}" | openssl passwd -6 -stdin)" | chpasswd
 fi
 
-# sudo設定（gpu-dev のみ許可）
-echo "${SSH_USER} ALL=(root) NOPASSWD:SETENV: /opt/venv/bin/gpu-dev" > "/etc/sudoers.d/${SSH_USER}"
-chmod 440 "/etc/sudoers.d/${SSH_USER}"
-
-# .ssh 設定
 mkdir -p "${SSH_HOME}/.ssh"
 chmod 700 "${SSH_HOME}/.ssh"
 
@@ -55,47 +84,27 @@ else
 fi
 chmod 600 "${SSH_HOME}/.ssh/authorized_keys"
 
-# 一般ユーザ用 kubeconfig は作らない
 mkdir -p "${SSH_HOME}/.kube"
 chmod 700 "${SSH_HOME}/.kube"
 
-# admin kubeconfig の存在確認
-if [ -n "${K8S_ADMIN_KUBECONFIG:-}" ]; then
-  if [ ! -f "${K8S_ADMIN_KUBECONFIG}" ]; then
-    echo "[entrypoint] warning: K8S_ADMIN_KUBECONFIG not found at ${K8S_ADMIN_KUBECONFIG}"
-  fi
-else
-  echo "[entrypoint] warning: K8S_ADMIN_KUBECONFIG is not set"
+if [ ! -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
+  echo "[entrypoint] warning: serviceaccount token is not mounted" >&2
+  echo "[entrypoint] warning: kubectl in-cluster auth may not work" >&2
 fi
 
-# 必要環境変数を bashrc に見せる
-if ! grep -q 'export K8S_NAMESPACE=' "${SSH_HOME}/.bashrc" 2>/dev/null; then
-  echo "export K8S_NAMESPACE=${K8S_NAMESPACE}" >> "${SSH_HOME}/.bashrc"
-fi
+touch "${SSH_HOME}/.bashrc"
 
-if ! grep -q 'export K8S_SERVER=' "${SSH_HOME}/.bashrc" 2>/dev/null; then
-  echo "export K8S_SERVER=${K8S_SERVER:-}" >> "${SSH_HOME}/.bashrc"
-fi
+append_or_replace_export "K8S_NAMESPACE" "${K8S_NAMESPACE}" "${SSH_HOME}/.bashrc"
 
-if ! grep -q 'export K8S_CA_CERT_B64=' "${SSH_HOME}/.bashrc" 2>/dev/null; then
-  echo "export K8S_CA_CERT_B64=${K8S_CA_CERT_B64:-}" >> "${SSH_HOME}/.bashrc"
-fi
+append_if_missing "alias k='kubectl -n \$K8S_NAMESPACE'" "${SSH_HOME}/.bashrc"
 
-if ! grep -q 'export K8S_ADMIN_KUBECONFIG=' "${SSH_HOME}/.bashrc" 2>/dev/null; then
-  echo "export K8S_ADMIN_KUBECONFIG=${K8S_ADMIN_KUBECONFIG:-}" >> "${SSH_HOME}/.bashrc"
-fi
+append_if_missing 'export PATH="/opt/venv/bin:$PATH"' "${SSH_HOME}/.bashrc"
 
-# 使いやすさのため alias を追加
-if ! grep -q "alias gpu-dev=" "${SSH_HOME}/.bashrc" 2>/dev/null; then
-  echo "alias gpu-dev='sudo K8S_NAMESPACE=\$K8S_NAMESPACE K8S_ADMIN_KUBECONFIG=\$K8S_ADMIN_KUBECONFIG /opt/venv/bin/gpu-dev'" >> "${SSH_HOME}/.bashrc"
-fi
-
-# 所有権調整
 chown -R "${SSH_USER}:${SSH_GROUP}" "${SSH_HOME}"
 
-# sshd_config セキュリティ設定
 sed -i 's/^#\?PasswordAuthentication .*/PasswordAuthentication no/' /etc/ssh/sshd_config
 sed -i 's/^#\?ChallengeResponseAuthentication .*/ChallengeResponseAuthentication no/' /etc/ssh/sshd_config
+sed -i 's/^#\?KbdInteractiveAuthentication .*/KbdInteractiveAuthentication no/' /etc/ssh/sshd_config || true
 sed -i 's/^#\?UsePAM .*/UsePAM yes/' /etc/ssh/sshd_config || true
 
 ensure_line "PermitRootLogin no" /etc/ssh/sshd_config

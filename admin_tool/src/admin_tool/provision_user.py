@@ -2,14 +2,11 @@
 
 import argparse
 import json
-import os
 import re
 import shlex
 import subprocess
 import sys
 from pathlib import Path
-
-import yaml
 
 
 def run(cmd, input_text=None, check=True, capture_output=True):
@@ -38,93 +35,96 @@ def normalize_name(value: str) -> str:
     value = value.strip("-")
     if not value:
         raise ValueError("normalized name became empty")
+    if len(value) > 63:
+        value = value[:63].rstrip("-")
+    if not value:
+        raise ValueError("normalized name became empty after truncation")
     return value
-
-
-def kubectl_jsonpath(expr: str) -> str:
-    r = run(["kubectl", "config", "view", "--raw", "--minify", "-o", f"jsonpath={expr}"])
-    return r.stdout.strip()
-
-
-def get_cluster_info():
-    server = kubectl_jsonpath("{.clusters[0].cluster.server}")
-    ca_cert_b64 = kubectl_jsonpath("{.clusters[0].cluster.certificate-authority-data}")
-    if not server or not ca_cert_b64:
-        raise RuntimeError("failed to read cluster server or CA cert from current kubeconfig")
-    return server, ca_cert_b64
 
 
 def kubectl_apply(yaml_text: str):
     run(["kubectl", "apply", "-f", "-"], input_text=yaml_text, capture_output=False)
 
 
-def build_namespace_yaml(
-    namespace: str,
-    storage: str,
-    gpu_quota: int,
-    cpu_quota: str,
-    memory_quota: str,
-    pvc_name: str,
-):
-    quota_block = f"""\
----
-apiVersion: v1
-kind: ResourceQuota
-metadata:
-  name: quota
-  namespace: {namespace}
-spec:
-  hard:
-    requests.cpu: "{cpu_quota}"
-    limits.cpu: "{cpu_quota}"
-    requests.memory: "{memory_quota}"
-    limits.memory: "{memory_quota}"
-    requests.storage: "{storage}"
-    persistentvolumeclaims: "5"
-    requests.nvidia.com/gpu: "{gpu_quota}"
-    limits.nvidia.com/gpu: "{gpu_quota}"
-""" if gpu_quota >= 0 else ""
-
-    return f"""\
-apiVersion: v1
-kind: Namespace
-metadata:
-  name: {namespace}
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: {pvc_name}
-  namespace: {namespace}
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: {storage}
-{quota_block}"""
+def kubectl_wait_deployment(namespace: str, name: str, timeout: str = "180s"):
+    run(
+        [
+            "kubectl",
+            "-n",
+            namespace,
+            "rollout",
+            "status",
+            f"deployment/{name}",
+            f"--timeout={timeout}",
+        ],
+        capture_output=False,
+    )
 
 
-def write_admin_kubeconfig_copy(path: Path, server_override: str | None = None):
-    r = run(["kubectl", "config", "view", "--raw", "--minify"])
-    content = r.stdout
-    if not content.strip():
-        raise RuntimeError("failed to get raw kubeconfig from current context")
+def kubectl_get_pod_name(namespace: str, label_selector: str) -> str:
+    r = run(
+        [
+            "kubectl",
+            "-n",
+            namespace,
+            "get",
+            "pods",
+            "-l",
+            label_selector,
+            "-o",
+            "jsonpath={.items[0].metadata.name}",
+        ]
+    )
+    pod_name = r.stdout.strip()
+    if not pod_name:
+        raise RuntimeError("failed to find ssh pod")
+    return pod_name
 
-    config = yaml.safe_load(content)
 
-    if server_override:
-        try:
-            config["clusters"][0]["cluster"]["server"] = server_override
-        except (KeyError, IndexError, TypeError) as exc:
-            raise RuntimeError("failed to override kubeconfig server") from exc
+def kubectl_get_node_name_of_pod(namespace: str, pod_name: str) -> str:
+    r = run(
+        [
+            "kubectl",
+            "-n",
+            namespace,
+            "get",
+            "pod",
+            pod_name,
+            "-o",
+            "jsonpath={.spec.nodeName}",
+        ]
+    )
+    node_name = r.stdout.strip()
+    if not node_name:
+        raise RuntimeError("failed to resolve nodeName of ssh pod")
+    return node_name
 
-    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
-    os.chmod(path, 0o600)
 
+def kubectl_get_node_ip(node_name: str, preferred_type: str) -> str:
+    r = run(["kubectl", "get", "node", node_name, "-o", "json"])
+    data = json.loads(r.stdout)
+    addresses = data.get("status", {}).get("addresses", [])
 
-def docker_rm_if_exists(name: str):
-    run(["docker", "rm", "-f", name], check=False)
+    preferred = None
+    internal = None
+    external = None
+    fallback = None
+
+    for addr in addresses:
+        typ = addr.get("type")
+        val = addr.get("address")
+        if not typ or not val:
+            continue
+        if typ == preferred_type and not preferred:
+            preferred = val
+        if typ == "InternalIP" and not internal:
+            internal = val
+        if typ == "ExternalIP" and not external:
+            external = val
+        if not fallback:
+            fallback = val
+
+    return preferred or external or internal or fallback or ""
 
 
 def resolve_public_key(args) -> str:
@@ -147,69 +147,229 @@ def resolve_public_key(args) -> str:
     return public_key
 
 
-def docker_run(args):
-    public_key = resolve_public_key(args)
-    admin_kubeconfig_host_path = str(Path(args.admin_kubeconfig_copy).resolve())
+def build_manifest(args, public_key: str) -> str:
+    quota_block = ""
+    if args.gpu_quota >= 0:
+        quota_block = f"""\
+---
+apiVersion: v1
+kind: ResourceQuota
+metadata:
+  name: quota
+  namespace: {args.namespace}
+  labels:
+    app.kubernetes.io/managed-by: provision-user
+    provision-user.openai.local/user: {args.username}
+spec:
+  hard:
+    requests.cpu: "{args.cpu_quota}"
+    limits.cpu: "{args.cpu_quota}"
+    requests.memory: "{args.memory_quota}"
+    limits.memory: "{args.memory_quota}"
+    requests.storage: "{args.storage}"
+    persistentvolumeclaims: "5"
+    requests.nvidia.com/gpu: "{args.gpu_quota}"
+    limits.nvidia.com/gpu: "{args.gpu_quota}"
+"""
 
-    envs = [
-        "SSH_USER", args.username,
-        "SSH_UID", str(args.ssh_uid),
-        "SSH_GROUP", args.username,
-        "SSH_GID", str(args.ssh_gid),
-        "SSH_PUBLIC_KEY", public_key,
-        "K8S_NAMESPACE", args.namespace,
-        "K8S_SERVER", args.k8s_server,
-        "K8S_CA_CERT_B64", args.k8s_ca_cert_b64,
-        "K8S_ADMIN_KUBECONFIG", "/etc/kube/admin.kubeconfig",
-    ]
-
-    cmd = [
-        "docker", "run", "-d",
-        "--name", args.container_name,
-        "-p", f"{args.port}:22",
-        "-v", f"{admin_kubeconfig_host_path}:/etc/kube/admin.kubeconfig:ro",
-    ]
-
-    for i in range(0, len(envs), 2):
-        cmd += ["-e", f"{envs[i]}={envs[i+1]}"]
-
-    cmd.append(args.image)
-    run(cmd, capture_output=False)
+    return f"""\
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: {args.namespace}
+  labels:
+    app.kubernetes.io/managed-by: provision-user
+    provision-user.openai.local/user: {args.username}
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: {args.pvc_name}
+  namespace: {args.namespace}
+  labels:
+    app.kubernetes.io/managed-by: provision-user
+    provision-user.openai.local/user: {args.username}
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: {args.storage}
+{quota_block}---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {args.service_account_name}
+  namespace: {args.namespace}
+  labels:
+    app.kubernetes.io/managed-by: provision-user
+    provision-user.openai.local/user: {args.username}
+automountServiceAccountToken: true
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {args.role_name}
+  namespace: {args.namespace}
+  labels:
+    app.kubernetes.io/managed-by: provision-user
+    provision-user.openai.local/user: {args.username}
+rules:
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+  - apiGroups: [""]
+    resources: ["pods/exec"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods/log"]
+    verbs: ["get", "list"]
+  - apiGroups: [""]
+    resources: ["persistentvolumeclaims"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: [""]
+    resources: ["events"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {args.role_binding_name}
+  namespace: {args.namespace}
+  labels:
+    app.kubernetes.io/managed-by: provision-user
+    provision-user.openai.local/user: {args.username}
+subjects:
+  - kind: ServiceAccount
+    name: {args.service_account_name}
+    namespace: {args.namespace}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {args.role_name}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {args.deployment_name}
+  namespace: {args.namespace}
+  labels:
+    app.kubernetes.io/name: ssh-user
+    app.kubernetes.io/managed-by: provision-user
+    provision-user.openai.local/user: {args.username}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: ssh-user
+      provision-user.openai.local/user: {args.username}
+  strategy:
+    type: Recreate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: ssh-user
+        app.kubernetes.io/managed-by: provision-user
+        provision-user.openai.local/user: {args.username}
+    spec:
+      serviceAccountName: {args.service_account_name}
+      automountServiceAccountToken: true
+      enableServiceLinks: false
+      nodeSelector:
+        {args.login_node_label_key}: "{args.login_node_label_value}"
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: ssh
+          image: {args.image}
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: ssh
+              containerPort: 22
+              hostPort: {args.port}
+              protocol: TCP
+          env:
+            - name: SSH_USER
+              value: "{args.username}"
+            - name: SSH_UID
+              value: "{args.ssh_uid}"
+            - name: SSH_GROUP
+              value: "{args.username}"
+            - name: SSH_GID
+              value: "{args.ssh_gid}"
+            - name: SSH_PUBLIC_KEY
+              value: "{public_key}"
+            - name: K8S_NAMESPACE
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.namespace
+          resources:
+            requests:
+              cpu: "{args.ssh_cpu_request}"
+              memory: "{args.ssh_memory_request}"
+            limits:
+              cpu: "{args.ssh_cpu_limit}"
+              memory: "{args.ssh_memory_limit}"
+          securityContext:
+            allowPrivilegeEscalation: false
+          readinessProbe:
+            tcpSocket:
+              port: 22
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            tcpSocket:
+              port: 22
+            initialDelaySeconds: 10
+            periodSeconds: 10
+"""
 
 
 def parse_args():
     p = argparse.ArgumentParser(
-        description="Provision one SSH container + namespace + PVC + quota."
+        description="Provision one namespace + PVC + quota + SA/RBAC + SSH deployment."
     )
     p.add_argument("--user", required=True, help="logical username, e.g. taro")
 
     key_group = p.add_mutually_exclusive_group(required=True)
     key_group.add_argument(
         "--public-key-file",
-        help="path to user's SSH public key file"
+        help="path to user's SSH public key file",
     )
     key_group.add_argument(
         "--public-key-string",
-        help="SSH public key string"
+        help="SSH public key string",
     )
 
-    p.add_argument("--image", required=True, help="SSH container image")
-    p.add_argument("--port", type=int, required=True, help="host SSH port to expose")
-    p.add_argument(
-        "--api-server",
-        default=None,
-        help="override Kubernetes API server URL, e.g. https://133.41.116.80:6443",
-    )
+    p.add_argument("--image", required=True, help="SSH pod image")
+    p.add_argument("--port", type=int, required=True, help="hostPort to expose SSH on login node")
+
     p.add_argument("--storage", default="100Gi", help="workspace PVC size")
     p.add_argument("--pvc-name", default="workspace", help="workspace PVC name")
     p.add_argument("--gpu-quota", type=int, default=1, help="GPU quota for the namespace")
     p.add_argument("--cpu-quota", default="16", help="CPU quota")
     p.add_argument("--memory-quota", default="64Gi", help="memory quota")
+
     p.add_argument("--ssh-uid", type=int, default=2000, help="UID inside SSH container")
     p.add_argument("--ssh-gid", type=int, default=2000, help="GID inside SSH container")
-    p.add_argument("--out-dir", default="./out", help="output directory")
-    p.add_argument("--container-name", default=None, help="docker container name")
+
+    p.add_argument("--ssh-cpu-request", default="100m", help="ssh pod cpu request")
+    p.add_argument("--ssh-cpu-limit", default="1", help="ssh pod cpu limit")
+    p.add_argument("--ssh-memory-request", default="128Mi", help="ssh pod memory request")
+    p.add_argument("--ssh-memory-limit", default="1Gi", help="ssh pod memory limit")
+
     p.add_argument("--namespace", default=None, help="override namespace")
+    p.add_argument("--out-dir", default="./out", help="output directory")
+
+    p.add_argument("--login-node-label-key", default="role", help="node label key for login server")
+    p.add_argument("--login-node-label-value", default="login-server", help="node label value for login server")
+
+    p.add_argument(
+        "--node-address-type",
+        default="ExternalIP",
+        choices=["ExternalIP", "InternalIP"],
+        help="preferred node address type to report for SSH endpoint",
+    )
+
     return p.parse_args()
 
 
@@ -219,50 +379,57 @@ def main():
     username_norm = normalize_name(args.user)
     args.username = username_norm
     args.namespace = args.namespace or normalize_name(f"ns-{username_norm}")
-    args.container_name = args.container_name or normalize_name(f"ssh-{username_norm}")
+
+    args.service_account_name = "ssh-user"
+    args.role_name = "ssh-user-role"
+    args.role_binding_name = "ssh-user-binding"
+    args.deployment_name = normalize_name(f"ssh-{username_norm}")
+
+    public_key = resolve_public_key(args)
 
     out_dir = (Path(args.out_dir) / username_norm).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    manifest_path = (out_dir / f"provision-{username_norm}.yaml").resolve()
 
-    namespace_yaml_path = (out_dir / f"namespace-{username_norm}.yaml").resolve()
-    admin_kubeconfig_copy_path = (out_dir / f"admin-{username_norm}.kubeconfig").resolve()
+    manifest = build_manifest(args, public_key)
+    manifest_path.write_text(manifest, encoding="utf-8")
 
-    detected_k8s_server, args.k8s_ca_cert_b64 = get_cluster_info()
-    args.k8s_server = args.api_server or detected_k8s_server
+    print("[1/3] applying namespace / pvc / quota / sa / rbac / deployment...", file=sys.stderr)
+    kubectl_apply(manifest)
 
-    namespace_yaml = build_namespace_yaml(
-        namespace=args.namespace,
-        storage=args.storage,
-        gpu_quota=args.gpu_quota,
-        cpu_quota=args.cpu_quota,
-        memory_quota=args.memory_quota,
-        pvc_name=args.pvc_name,
+    print("[2/3] waiting for ssh deployment rollout...", file=sys.stderr)
+    kubectl_wait_deployment(args.namespace, args.deployment_name)
+
+    print("[3/3] collecting endpoint info...", file=sys.stderr)
+    pod_name = kubectl_get_pod_name(
+        args.namespace,
+        f"app.kubernetes.io/name=ssh-user,provision-user.openai.local/user={args.username}",
     )
-    namespace_yaml_path.write_text(namespace_yaml, encoding="utf-8")
-
-    print("[1/4] applying namespace / pvc / quota...", file=sys.stderr)
-    kubectl_apply(namespace_yaml)
-
-    print("[2/4] writing admin kubeconfig copy...", file=sys.stderr)
-    write_admin_kubeconfig_copy(admin_kubeconfig_copy_path, server_override=args.k8s_server)
-    args.admin_kubeconfig_copy = str(admin_kubeconfig_copy_path)
-
-    print("[3/4] starting ssh container...", file=sys.stderr)
-    docker_rm_if_exists(args.container_name)
-    docker_run(args)
+    node_name = kubectl_get_node_name_of_pod(args.namespace, pod_name)
+    node_ip = kubectl_get_node_ip(node_name, args.node_address_type)
 
     summary = {
         "user": args.username,
         "namespace": args.namespace,
         "pvc": args.pvc_name,
-        "docker_container": args.container_name,
+        "service_account": args.service_account_name,
+        "role": args.role_name,
+        "role_binding": args.role_binding_name,
+        "deployment": args.deployment_name,
+        "ssh_pod": pod_name,
+        "ssh_node": node_name,
+        "ssh_host_ip": node_ip,
         "ssh_port": args.port,
-        "api_server": args.k8s_server,
-        "namespace_yaml": str(namespace_yaml_path),
-        "admin_kubeconfig_copy": str(admin_kubeconfig_copy_path),
+        "ssh_endpoint": f"{node_ip}:{args.port}" if node_ip else None,
+        "manifest_path": str(manifest_path),
+        "notes": [
+            "SSH pod uses in-cluster ServiceAccount auth; no admin kubeconfig is copied into the pod.",
+            "workspace PVC is created but not mounted into the SSH pod to avoid RWO multi-attach issues before RWX/NFS is introduced.",
+            "gpu-dev is intended to run as the normal SSH user, not via sudo.",
+            "SSH is exposed via hostPort on a login-server-labeled node, so the endpoint is that node's IP and the specified port.",
+        ],
     }
 
-    print("[4/4] done", file=sys.stderr)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 
