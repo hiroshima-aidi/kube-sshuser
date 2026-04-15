@@ -41,7 +41,7 @@ if [ "${SSH_PASSWORD_ENABLED}" = "yes" ] && [ -n "${SSH_PASSWORD_VALUE}" ]; then
 fi
 
 # sudo設定（gpu-dev のみ許可）
-echo "${SSH_USER} ALL=(root) NOPASSWD: /usr/local/bin/gpu-dev" > "/etc/sudoers.d/${SSH_USER}"
+echo "${SSH_USER} ALL=(root) NOPASSWD: /opt/venv/bin/gpu-dev" > "/etc/sudoers.d/${SSH_USER}"
 chmod 440 "/etc/sudoers.d/${SSH_USER}"
 
 # .ssh 設定
@@ -87,7 +87,7 @@ fi
 
 # 使いやすさのため alias を追加
 if ! grep -q "alias gpu-dev=" "${SSH_HOME}/.bashrc" 2>/dev/null; then
-  echo "alias gpu-dev='sudo /usr/local/bin/gpu-dev'" >> "${SSH_HOME}/.bashrc"
+  echo "alias gpu-dev='sudo /opt/venv/bin/gpu-dev'" >> "${SSH_HOME}/.bashrc"
 fi
 
 # 所有権調整
