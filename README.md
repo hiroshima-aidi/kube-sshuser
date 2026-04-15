@@ -70,6 +70,7 @@ kube-sshuser create taro --public-key-file /path/to/key.pub --image ghcr.io/hiro
 kube-sshuser create taro \
 	--public-key-file /path/to/key.pub \
 	--image ghcr.io/hiroshima-aidi/ssh-for-k8s:latest \
+	--pull always \
 	--port 2222 \
 	--storage 100Gi \
 	--gpu-quota 1
@@ -100,6 +101,7 @@ kube-sshuser list --json
 
 - `--public-key-file` / `--public-key-string` (どちらか必須)
 - `--image` (必須)
+- `--pull` (`always` / `if-not-present` / `never`, default: `if-not-present`)
 - `--port` (必須)
 - `--storage` (default: `100Gi`)
 - `--pvc-name` (default: `workspace`)

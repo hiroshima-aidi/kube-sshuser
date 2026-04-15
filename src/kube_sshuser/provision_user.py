@@ -50,6 +50,21 @@ def normalize_name(value: str) -> str:
     return value
 
 
+def parse_image_pull_policy(value: str) -> str:
+    normalized = value.strip().lower().replace("_", "-")
+    mapping = {
+        "always": "Always",
+        "if-not-present": "IfNotPresent",
+        "ifnotpresent": "IfNotPresent",
+        "never": "Never",
+    }
+    if normalized in mapping:
+        return mapping[normalized]
+    raise argparse.ArgumentTypeError(
+        "--pull must be one of: always, if-not-present, never"
+    )
+
+
 def kubectl_apply(yaml_text: str):
     run(["kubectl", "apply", "-f", "-"], input_text=yaml_text, capture_output=False)
 
@@ -326,7 +341,7 @@ spec:
       containers:
         - name: ssh
           image: {args.image}
-          imagePullPolicy: IfNotPresent
+          imagePullPolicy: {args.image_pull_policy}
           ports:
             - name: ssh
               containerPort: 22
@@ -386,6 +401,13 @@ def parse_args(argv=None):
     )
 
     p.add_argument("--image", required=True, help="SSH pod image")
+    p.add_argument(
+        "--pull",
+        dest="image_pull_policy",
+        default="IfNotPresent",
+        type=parse_image_pull_policy,
+        help="image pull policy: always / if-not-present / never (default: if-not-present)",
+    )
     p.add_argument("--port", type=int, required=True, help="hostPort to expose SSH on login node")
 
     p.add_argument("--storage", default="100Gi", help="workspace PVC size")
@@ -469,6 +491,7 @@ def main(argv=None):
         },
         "ssh_deployment": {
             "image": args.image,
+            "image_pull_policy": args.image_pull_policy,
             "host_port": args.port,
             "node_selector": {
                 args.login_node_label_key: args.login_node_label_value,
