@@ -32,9 +32,9 @@ pip install "git+https://github.com/hiroshima-aidi/kube-sshuser.git"
 `/opt` 配下の作成に権限が必要な環境では `sudo` を付けてください。
 
 ```bash
-python3 -m venv /opt/venv
-/opt/venv/bin/pip install --upgrade pip
-/opt/venv/bin/pip install "git+https://github.com/hiroshima-aidi/kube-sshuser.git"
+sudo python3 -m venv /opt/venv
+sudo /opt/venv/bin/pip install --upgrade pip
+sudo /opt/venv/bin/pip install "git+https://github.com/hiroshima-aidi/kube-sshuser.git"
 ```
 
 実行パスを通すには、以下を設定します。
@@ -43,11 +43,11 @@ python3 -m venv /opt/venv
 export PATH="/opt/venv/bin:$PATH"
 ```
 
-永続化する場合（zsh）:
+永続化する場合（bash）:
 
 ```bash
-echo 'export PATH="/opt/venv/bin:$PATH"' >> ~/.zshrc
-source ~/.zshrc
+echo 'export PATH="/opt/venv/bin:$PATH"' >> ~/.bashrc
+source ~/.bashrc
 ```
 
 インストール後、以下のコマンドが使えます（PATH 設定後）。
