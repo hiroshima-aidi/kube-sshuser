@@ -1,9 +1,9 @@
 # docker-ssh + Kubernetes GPU Job Environment
 
-SSH でログインし、簡単なコマンドで GPU Pod / Job を実行できる環境です。
+SSH コンテナイメージと`gpu-dev`ツール。
 
--   管理者：ユーザごとの namespace / PVC / SSH コンテナを自動作成
--   利用者：`gpu-dev` コマンドで GPU 環境に入る
+利用者は SSH でログインし、`gpu-dev` コマンドで GPU 環境に入ります。
+ユーザ管理は別のリポジトリで行います。
 
 ------------------------------------------------------------------------
 
@@ -41,40 +41,20 @@ gpu-dev --image nvidia/cuda:12.2.0-runtime-ubuntu22.04
 
 ------------------------------------------------------------------------
 
-## 管理者向け
+## ビルド
 
-### セットアップ
+### SSH コンテナイメージビルド
 
-make admin-install
-
-### イメージビルド
-
+```bash
 make ssh-build IMAGE=docker-ssh:latest
-
-### ユーザ作成
-
-provision-user --user taro --public-key-file /path/to/key.pub --image
-docker-ssh:latest --port 2222
-
-### provision-user オプション
-
--   --user : ユーザ名
--   --public-key-file : 公開鍵ファイル
--   --public-key-string : 公開鍵文字列
--   --image : SSH コンテナイメージ
--   --port : SSH ポート
--   --storage : PVC サイズ
--   --gpu-quota : GPU 制限
--   --cpu-quota : CPU 制限
--   --memory-quota : メモリ制限
+```
 
 ------------------------------------------------------------------------
 
 ## セキュリティ
 
 -   kubeconfig はユーザに渡さない
--   kubectlは禁止
--   sudoはgpu-devのみ
+-   SSH Pod には admin kubeconfig を配置しない（ServiceAccount トークンで namespace 内 API を利用する設計）
 
 ------------------------------------------------------------------------
 
