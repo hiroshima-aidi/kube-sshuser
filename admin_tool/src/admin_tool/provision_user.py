@@ -274,7 +274,6 @@ spec:
     spec:
       serviceAccountName: {args.service_account_name}
       automountServiceAccountToken: true
-      enableServiceLinks: false
       nodeSelector:
         {args.login_node_label_key}: "{args.login_node_label_value}"
       terminationGracePeriodSeconds: 30

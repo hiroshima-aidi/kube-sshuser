@@ -53,6 +53,8 @@ require_env SSH_GID
 SSH_GROUP="${SSH_GROUP:-$SSH_USER}"
 SSH_PUBLIC_KEY="${SSH_PUBLIC_KEY:-}"
 SSH_HOME="/home/${SSH_USER}"
+SA_DIR="/var/run/secrets/kubernetes.io/serviceaccount"
+KUBECONFIG_PATH="${SSH_HOME}/.kube/config"
 
 if [ -z "${K8S_NAMESPACE:-}" ]; then
   K8S_NAMESPACE="$(normalize_namespace "ns-${SSH_USER}")"
@@ -87,17 +89,44 @@ chmod 600 "${SSH_HOME}/.ssh/authorized_keys"
 mkdir -p "${SSH_HOME}/.kube"
 chmod 700 "${SSH_HOME}/.kube"
 
-if [ ! -f /var/run/secrets/kubernetes.io/serviceaccount/token ]; then
-  echo "[entrypoint] warning: serviceaccount token is not mounted" >&2
-  echo "[entrypoint] warning: kubectl in-cluster auth may not work" >&2
+if [ ! -f "${SA_DIR}/token" ] || [ ! -f "${SA_DIR}/ca.crt" ]; then
+  echo "[entrypoint] warning: serviceaccount token or ca.crt is not mounted" >&2
+  echo "[entrypoint] warning: kubectl may not work" >&2
+else
+  if [ -z "${KUBERNETES_SERVICE_HOST:-}" ] || [ -z "${KUBERNETES_SERVICE_PORT:-}" ]; then
+    echo "[entrypoint] warning: KUBERNETES_SERVICE_HOST/PORT is not set" >&2
+    echo "[entrypoint] warning: ~/.kube/config was not generated" >&2
+  else
+    cat > "${KUBECONFIG_PATH}" <<EOF
+apiVersion: v1
+kind: Config
+clusters:
+  - name: in-cluster
+    cluster:
+      server: "https://${KUBERNETES_SERVICE_HOST}:${KUBERNETES_SERVICE_PORT}"
+      certificate-authority: ${SA_DIR}/ca.crt
+users:
+  - name: sa-user
+    user:
+      tokenFile: ${SA_DIR}/token
+contexts:
+  - name: default
+    context:
+      cluster: in-cluster
+      user: sa-user
+      namespace: "${K8S_NAMESPACE}"
+current-context: default
+EOF
+    chmod 600 "${KUBECONFIG_PATH}"
+  fi
 fi
 
 touch "${SSH_HOME}/.bashrc"
 
 append_or_replace_export "K8S_NAMESPACE" "${K8S_NAMESPACE}" "${SSH_HOME}/.bashrc"
+append_or_replace_export "KUBECONFIG" "${KUBECONFIG_PATH}" "${SSH_HOME}/.bashrc"
 
 append_if_missing "alias k='kubectl -n \$K8S_NAMESPACE'" "${SSH_HOME}/.bashrc"
-
 append_if_missing 'export PATH="/opt/venv/bin:$PATH"' "${SSH_HOME}/.bashrc"
 
 chown -R "${SSH_USER}:${SSH_GROUP}" "${SSH_HOME}"
