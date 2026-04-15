@@ -17,7 +17,7 @@ def kubectl_apply(namespace: str, manifest: str, kubeconfig: str):
     env["KUBECONFIG"] = kubeconfig
 
     proc = subprocess.Popen(
-        ["kubectl", "-n", namespace, "apply", "-f", "-"],
+        ["kubectl", "-n", namespace, "apply", "--validate=false", "-f", "-"],
         stdin=subprocess.PIPE,
         text=True,
         env=env,
@@ -44,6 +44,12 @@ def main():
     parser.add_argument("--runtime-class", default="nvidia", help="RuntimeClass name")
     parser.add_argument("--node-label-key", default="gpu", help="Node selector key")
     parser.add_argument("--node-label-value", default="true", help="Node selector value")
+
+    parser.add_argument("--cpu-request", default="2", help="CPU request")
+    parser.add_argument("--cpu-limit", default="4", help="CPU limit")
+    parser.add_argument("--memory-request", default="8Gi", help="Memory request")
+    parser.add_argument("--memory-limit", default="16Gi", help="Memory limit")
+
     args = parser.parse_args()
 
     namespace = os.environ.get("K8S_NAMESPACE")
@@ -60,7 +66,6 @@ def main():
         print(f"K8S_ADMIN_KUBECONFIG not found: {admin_kubeconfig}", file=sys.stderr)
         sys.exit(1)
 
-    # sudo 実行時は元のユーザ名を優先
     invoking_user = (
         os.environ.get("SUDO_USER")
         or os.environ.get("USER")
@@ -92,7 +97,12 @@ def main():
             tty: true
             stdin: true
             resources:
+              requests:
+                cpu: "{args.cpu_request}"
+                memory: "{args.memory_request}"
               limits:
+                cpu: "{args.cpu_limit}"
+                memory: "{args.memory_limit}"
                 nvidia.com/gpu: {args.gpu}
             volumeMounts:
             - name: workspace
