@@ -150,11 +150,13 @@ def docker_run(args):
         "K8S_ADMIN_KUBECONFIG", "/etc/kube/admin.kubeconfig",
     ]
 
+    admin_kubeconfig_host_path = str(Path(args.admin_kubeconfig_copy).resolve())
+
     cmd = [
         "docker", "run", "-d",
         "--name", args.container_name,
         "-p", f"{args.port}:22",
-        "-v", f"{args.admin_kubeconfig_copy}:/etc/kube/admin.kubeconfig:ro",
+        "-v", f"{admin_kubeconfig_host_path}:/etc/kube/admin.kubeconfig:ro",
     ]
 
     for i in range(0, len(envs), 2):
@@ -203,11 +205,11 @@ def main():
     args.namespace = args.namespace or normalize_name(f"ns-{username_norm}")
     args.container_name = args.container_name or normalize_name(f"ssh-{username_norm}")
 
-    out_dir = Path(args.out_dir) / username_norm
+    out_dir = (Path(args.out_dir) / username_norm).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    namespace_yaml_path = out_dir / f"namespace-{username_norm}.yaml"
-    admin_kubeconfig_copy_path = out_dir / f"admin-{username_norm}.kubeconfig"
+    namespace_yaml_path = (out_dir / f"namespace-{username_norm}.yaml").resolve()
+    admin_kubeconfig_copy_path = (out_dir / f"admin-{username_norm}.kubeconfig").resolve()
 
     args.k8s_server, args.k8s_ca_cert_b64 = get_cluster_info()
 
