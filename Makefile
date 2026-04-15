@@ -1,46 +1,65 @@
-# Variables
-IMAGE_NAME_BASE := rellab/docker-ssh
-DOCKER_REGISTRY := ghcr.io
-NOGPU_IMAGE := $(DOCKER_REGISTRY)/$(IMAGE_NAME_BASE)-nogpu:latest
-GPU_IMAGE_BASE := $(DOCKER_REGISTRY)/$(IMAGE_NAME_BASE)-gpu
-CUDA_VERSIONS := 11.8.0 12.0.0 12.2.0 12.6.2 12.8.1
+SHELL := /bin/bash
 
-# GitHub credentials
-GITHUB_USER ?=
-GITHUB_TOKEN ?=
+# ---------------------------------------------------------
+# Paths
+# ---------------------------------------------------------
+ROOT_DIR := $(CURDIR)
+ADMIN_DIR := $(ROOT_DIR)/admin_tool
+SSH_DIR := $(ROOT_DIR)/ssh_container
 
-.PHONY: all build-nogpu build-gpu build login clean
+# ---------------------------------------------------------
+# Python / venv
+# ---------------------------------------------------------
+PYTHON ?= python3
+VENV ?= $(HOME)/venvs/docker-ssh-admin
+VENV_BIN := $(VENV)/bin
+PIP := $(VENV_BIN)/pip
 
-all: build
+# ---------------------------------------------------------
+# Docker
+# ---------------------------------------------------------
+DOCKER ?= docker
+IMAGE ?= docker-ssh:latest
 
-# No-GPU image (multi-arch)
-build-nogpu:
-	docker buildx build --platform linux/amd64,linux/arm64 \
-		-f Dockerfile-ssh \
-		-t $(NOGPU_IMAGE) \
-		--push .
+.PHONY: help
+help:
+	@echo "Available targets:"
+	@echo "  venv            Create virtualenv"
+	@echo "  admin-install   Install admin_tool into venv"
+	@echo "  ssh-build       Build SSH container image"
+	@echo "  clean           Cleanup build artifacts"
+	@echo ""
+	@echo "Example:"
+	@echo "  make admin-install"
+	@echo "  make ssh-build IMAGE=docker-ssh:latest"
 
-# GPU images (amd64 only)
-build-gpu:
-	@for version in $(CUDA_VERSIONS); do \
-	  docker buildx build --platform linux/amd64 \
-	    -f Dockerfile-cuda \
-	    --build-arg CUDA_VERSION=$$version \
-	    -t $(GPU_IMAGE_BASE):$$version \
-	    --push .; \
-	done
+# ---------------------------------------------------------
+# venv / admin tool
+# ---------------------------------------------------------
+.PHONY: venv
+venv:
+	test -d "$(VENV)" || $(PYTHON) -m venv "$(VENV)"
+	$(PIP) install --upgrade pip setuptools wheel
 
-# Both
-build: build-nogpu build-gpu
+.PHONY: admin-install
+admin-install: venv
+	cd $(ADMIN_DIR) && "$(PIP)" install -e .
 
-# GHCR login
-login:
-	@if [ -z "$(GITHUB_USER)" ] || [ -z "$(GITHUB_TOKEN)" ]; then \
-	  echo "Error: GITHUB_USER and GITHUB_TOKEN must be set"; \
-	  exit 1; \
-	fi
-	echo "$(GITHUB_TOKEN)" | docker login $(DOCKER_REGISTRY) -u $(GITHUB_USER) --password-stdin
+# ---------------------------------------------------------
+# SSH container image
+# ---------------------------------------------------------
+.PHONY: ssh-build
+ssh-build:
+	$(DOCKER) build -t $(IMAGE) -f $(SSH_DIR)/Dockerfile .
 
-# Clean
+# ---------------------------------------------------------
+# Cleanup
+# ---------------------------------------------------------
+.PHONY: clean
 clean:
-	docker image prune -f
+	find $(ROOT_DIR) -type d -name "__pycache__" -prune -exec rm -rf {} +
+	find $(ROOT_DIR) -type d -name "*.egg-info" -prune -exec rm -rf {} +
+
+.PHONY: clean-venv
+clean-venv:
+	rm -rf "$(VENV)"

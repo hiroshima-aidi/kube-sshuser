@@ -1,161 +1,83 @@
-# Docker SSH
+# docker-ssh + Kubernetes GPU Job Environment
 
-このリポジトリは **SSH踏み台サーバ (nogpu)** と **CUDA対応 SSHサーバ (gpu)** の Docker イメージを提供します。
+SSH でログインし、簡単なコマンドで GPU Pod / Job を実行できる環境です。
 
-## イメージ一覧
+-   管理者：ユーザごとの namespace / PVC / SSH コンテナを自動作成
+-   利用者：`gpu-dev` コマンドで GPU 環境に入る
 
-| イメージ名                                               | 説明                     |
-|---------------------------------------------------------|--------------------------|
-| `ghcr.io/rellab/docker-ssh-nogpu:latest`                | 軽量SSH踏み台サーバ (multi-arch) |
-| `ghcr.io/rellab/docker-ssh-gpu:<CUDA_VERSION>`         | CUDA環境付きSSHサーバ (amd64のみ) |
+------------------------------------------------------------------------
 
----
+## 全体構成
 
-## 構成ファイル
+\[User\] → SSH → \[SSH Container\] → sudo gpu-dev →
+Kubernetes(namespaceごと)
 
-- `Dockerfile-ssh` : SSH-only (nogpu) 用 Dockerfile
-- `Dockerfile-cuda` : CUDA対応 (gpu) 用 Dockerfile
-- `entrypoint.sh` : 共通エントリポイントスクリプト
-- `Makefile` : イメージのビルド・push 用
+------------------------------------------------------------------------
 
----
+## 利用者向け
 
-## 環境変数
+### ログイン
 
-| 変数名                 | 説明                                                        | デフォルト |
-|----------------------|------------------------------------------------------------|:--------:|
-| SSH_USER            | 作成するSSHユーザ名                                          | sshuser |
-| SSH_UID             | SSHユーザ UID                                               | 2000    |
-| SSH_GROUP           | SSHグループ名                                                | sshgroup|
-| SSH_GID             | SSHグループ GID                                              | 2000    |
-| SSH_PASSWORD_ENABLED | パスワードを設定するか (`yes` / `no`)                           | no      |
-| SSH_PASSWORD_VALUE  | 設定するパスワード (`SSH_PASSWORD_ENABLED=yes` の場合のみ有効) | (空)    |
-| SSH_GRANT_SUDO      | sudo権限付与 (`yes` / `nopass` / `no`)                          | nopass  |
-| SSH_PUBLIC_KEY      | 公開鍵 (authorized_keys に登録)                             | (必須)  |
+ssh -p `<PORT>`{=html} `<USER>`{=html}@`<HOST>`{=html}
 
----
+### GPU 開発環境
 
-## ビルド方法
+gpu-dev\
+gpu-dev --gpu 1 --ttl 3600\
+gpu-dev --image nvidia/cuda:12.2.0-runtime-ubuntu22.04
 
-### 1. GHCRログイン
-```bash
-export GITHUB_USER=<your-username>
-export GITHUB_TOKEN=<your-ghcr-token>
-make login
-```
+### gpu-dev オプション
 
-### 2. SSH-only イメージビルド・push
-```bash
-make build-nogpu
-```
+-   --ttl : Pod の生存時間（秒）
+-   --gpu : 使用する GPU 数
+-   --image : GPU Pod のコンテナイメージ
+-   --name : Pod 名
+-   --pvc : PVC 名
+-   --mount-path : マウント先
 
-### 3. CUDA版イメージビルド・push
-```bash
-make build-gpu
-```
+### データ保存
 
-### 4. 全てビルド・push
-```bash
-make build
-```
+/workspace（PVC）
 
-### 5. キャッシュ削除
-```bash
-make clean
-```
+------------------------------------------------------------------------
 
----
+## 管理者向け
 
-## docker run の例
+### セットアップ
 
-SSH-only (nogpu) コンテナを直接起動する例：
+make admin-install
 
-```bash
-docker run -d \
-  -p 2222:22 \
-  -e SSH_USER=myuser \
-  -e SSH_PUBLIC_KEY="ssh-rsa AAAAB3..." \
-  --name ssh \
-  ghcr.io/rellab/docker-ssh-nogpu:latest
-```
+### イメージビルド
 
-sudo実行時にパスワードを要求させたい場合：
+make ssh-build IMAGE=docker-ssh:latest
 
-```bash
-docker run -d \
-  -p 2222:22 \
-  -e SSH_USER=myuser \
-  -e SSH_PUBLIC_KEY="ssh-rsa AAAAB3..." \
-  -e SSH_PASSWORD_ENABLED=yes \
-  -e SSH_PASSWORD_VALUE=mysecret \
-  -e SSH_GRANT_SUDO=yes \
-  --name ssh \
-  ghcr.io/rellab/docker-ssh-nogpu:latest
-```
+### ユーザ作成
 
----
+provision-user --user taro --public-key-file /path/to/key.pub --image
+docker-ssh:latest --port 2222
 
-## docker-compose.yml の例
+### provision-user オプション
 
-SSH踏み台サーバと RStudio サーバを同じネットワークで起動する例：
+-   --user : ユーザ名
+-   --public-key-file : 公開鍵ファイル
+-   --public-key-string : 公開鍵文字列
+-   --image : SSH コンテナイメージ
+-   --port : SSH ポート
+-   --storage : PVC サイズ
+-   --gpu-quota : GPU 制限
+-   --cpu-quota : CPU 制限
+-   --memory-quota : メモリ制限
 
-```yaml
-version: "3.9"
+------------------------------------------------------------------------
 
-services:
-  ssh:
-    image: ghcr.io/rellab/docker-ssh-nogpu:latest
-    container_name: ssh
-    environment:
-      - SSH_USER=youruser
-      - SSH_PUBLIC_KEY=ssh-rsa AAAA...
-    ports:
-      - "2222:22"
-    networks:
-      - internal
+## セキュリティ
 
-  rstudio:
-    image: ghcr.io/rellab/docker-rstudio:latest
-    container_name: rstudio-server
-    environment:
-      - RSTUDIO_PASSWORD=rstudio
-    volumes:
-      - ./work:/home/rstudio
-    networks:
-      - internal
+-   kubeconfig はユーザに渡さない
+-   kubectlは禁止
+-   sudoはgpu-devのみ
 
-networks:
-  internal:
-    driver: bridge
-```
+------------------------------------------------------------------------
 
-SSHトンネル接続例：
+## License
 
-```bash
-ssh -L 8787:rstudio-server:8787 youruser@your-server-ip -p 2222
-```
-
-ブラウザで `http://localhost:8787` にアクセスすれば、踏み台経由で RStudio Server に接続できます。
-
----
-
-## CUDA版の利用について
-
-**CUDA版 (gpu) イメージは amd64 プラットフォームのみ対応** しています。  
-多くの場合、ssh踏み台用途では **nogpu版** をご利用ください。
-
----
-
-## 注意
-
-- ログインは常に公開鍵認証のみ
-- rootログイン禁止
-- 必要に応じて `SSH_GRANT_SUDO` で sudo権限付与
-- パスワードログインは無効化されています
-
----
-
-## ライセンス
-
-MIT License
-
+MIT
