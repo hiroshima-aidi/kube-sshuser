@@ -9,6 +9,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import yaml
+
 
 def run(cmd, input_text=None, check=True, capture_output=True):
     if isinstance(cmd, str):
@@ -103,12 +105,21 @@ spec:
 {quota_block}"""
 
 
-def write_admin_kubeconfig_copy(path: Path):
+def write_admin_kubeconfig_copy(path: Path, server_override: str | None = None):
     r = run(["kubectl", "config", "view", "--raw", "--minify"])
     content = r.stdout
     if not content.strip():
         raise RuntimeError("failed to get raw kubeconfig from current context")
-    path.write_text(content, encoding="utf-8")
+
+    config = yaml.safe_load(content)
+
+    if server_override:
+        try:
+            config["clusters"][0]["cluster"]["server"] = server_override
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError("failed to override kubeconfig server") from exc
+
+    path.write_text(yaml.safe_dump(config, sort_keys=False), encoding="utf-8")
     os.chmod(path, 0o600)
 
 
@@ -118,7 +129,8 @@ def docker_rm_if_exists(name: str):
 
 def resolve_public_key(args) -> str:
     if args.public_key_file:
-        public_key = Path(args.public_key_file).read_text(encoding="utf-8").strip()
+        public_key_path = Path(args.public_key_file).expanduser().resolve()
+        public_key = public_key_path.read_text(encoding="utf-8").strip()
     else:
         public_key = args.public_key_string.strip()
 
@@ -137,6 +149,7 @@ def resolve_public_key(args) -> str:
 
 def docker_run(args):
     public_key = resolve_public_key(args)
+    admin_kubeconfig_host_path = str(Path(args.admin_kubeconfig_copy).resolve())
 
     envs = [
         "SSH_USER", args.username,
@@ -149,8 +162,6 @@ def docker_run(args):
         "K8S_CA_CERT_B64", args.k8s_ca_cert_b64,
         "K8S_ADMIN_KUBECONFIG", "/etc/kube/admin.kubeconfig",
     ]
-
-    admin_kubeconfig_host_path = str(Path(args.admin_kubeconfig_copy).resolve())
 
     cmd = [
         "docker", "run", "-d",
@@ -184,6 +195,11 @@ def parse_args():
 
     p.add_argument("--image", required=True, help="SSH container image")
     p.add_argument("--port", type=int, required=True, help="host SSH port to expose")
+    p.add_argument(
+        "--api-server",
+        default=None,
+        help="override Kubernetes API server URL, e.g. https://133.41.116.80:6443",
+    )
     p.add_argument("--storage", default="100Gi", help="workspace PVC size")
     p.add_argument("--pvc-name", default="workspace", help="workspace PVC name")
     p.add_argument("--gpu-quota", type=int, default=1, help="GPU quota for the namespace")
@@ -211,7 +227,8 @@ def main():
     namespace_yaml_path = (out_dir / f"namespace-{username_norm}.yaml").resolve()
     admin_kubeconfig_copy_path = (out_dir / f"admin-{username_norm}.kubeconfig").resolve()
 
-    args.k8s_server, args.k8s_ca_cert_b64 = get_cluster_info()
+    detected_k8s_server, args.k8s_ca_cert_b64 = get_cluster_info()
+    args.k8s_server = args.api_server or detected_k8s_server
 
     namespace_yaml = build_namespace_yaml(
         namespace=args.namespace,
@@ -227,7 +244,7 @@ def main():
     kubectl_apply(namespace_yaml)
 
     print("[2/4] writing admin kubeconfig copy...", file=sys.stderr)
-    write_admin_kubeconfig_copy(admin_kubeconfig_copy_path)
+    write_admin_kubeconfig_copy(admin_kubeconfig_copy_path, server_override=args.k8s_server)
     args.admin_kubeconfig_copy = str(admin_kubeconfig_copy_path)
 
     print("[3/4] starting ssh container...", file=sys.stderr)
@@ -240,6 +257,7 @@ def main():
         "pvc": args.pvc_name,
         "docker_container": args.container_name,
         "ssh_port": args.port,
+        "api_server": args.k8s_server,
         "namespace_yaml": str(namespace_yaml_path),
         "admin_kubeconfig_copy": str(admin_kubeconfig_copy_path),
     }
