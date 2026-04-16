@@ -3,6 +3,7 @@
 import argparse
 import json
 import sys
+from typing import Optional
 
 from kube_sshuser.common import normalize_name, normalize_optional_text, run
 from kube_sshuser.registry import (
@@ -42,7 +43,12 @@ def _annotate(namespace: str, resource: str, annotations: dict):
     run(["kubectl", "annotate", resource, "-n", namespace, "--overwrite", *pairs], capture_output=False)
 
 
-def _patch_resource_quota(namespace: str, cpu: str | None, memory: str | None, gpu: int | None):
+def _patch_resource_quota(
+    namespace: str,
+    cpu: Optional[str],
+    memory: Optional[str],
+    gpu: Optional[int],
+):
     hard = {}
     if cpu is not None:
         hard["requests.cpu"] = cpu
