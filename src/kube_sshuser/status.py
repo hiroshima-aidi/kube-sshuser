@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import sys
 
 from kube_sshuser.common import humanize_age, parse_k8s_timestamp, run
 from kube_sshuser.registry import list_user_records
@@ -156,6 +157,40 @@ def add_quantities(existing, new_value):
     return f"{existing}+{new_value}"
 
 
+def select_namespace_quota(resourcequotas, namespace_name):
+    namespace_items = [
+        item
+        for item in resourcequotas.get("items", [])
+        if item.get("metadata", {}).get("namespace") == namespace_name
+    ]
+    if not namespace_items:
+        return {}
+
+    for item in namespace_items:
+        if item.get("metadata", {}).get("name") == "quota":
+            return item.get("spec", {}).get("hard") or {}
+    return namespace_items[0].get("spec", {}).get("hard") or {}
+
+
+def format_namespace_quota(hard, request_key, limit_key=None, default="-"):
+    request_value = (hard or {}).get(request_key)
+    limit_value = (hard or {}).get(limit_key) if limit_key else None
+
+    if request_key == "requests.cpu":
+        if request_value:
+            request_value = normalize_cpu_value(request_value)
+        if limit_value:
+            limit_value = normalize_cpu_value(limit_value)
+
+    if request_value and limit_value and request_value != limit_value:
+        return f"{request_value}/{limit_value}"
+    if limit_value:
+        return limit_value
+    if request_value:
+        return request_value
+    return default
+
+
 def collect_status_groups(out_dir="./output"):
     # Load port information from registry
     port_by_namespace = {}
@@ -196,6 +231,16 @@ def collect_status_groups(out_dir="./output"):
             "json",
         ]
     )
+    resourcequotas = kubectl_get_json(
+        [
+            "kubectl",
+            "get",
+            "resourcequota",
+            "-A",
+            "-o",
+            "json",
+        ]
+    )
 
     pods_by_namespace = {}
     for pod in pods.get("items", []):
@@ -214,6 +259,7 @@ def collect_status_groups(out_dir="./output"):
             pods_by_namespace.get(namespace_name, []),
             key=lambda item: item.get("metadata", {}).get("name", ""),
         )
+        quota_hard = select_namespace_quota(resourcequotas, namespace_name)
 
         pod_rows = []
         port = port_by_namespace.get(namespace_name, "-")
@@ -253,6 +299,22 @@ def collect_status_groups(out_dir="./output"):
             {
                 "namespace": namespace_name,
                 "age": namespace_age,
+                "port": port,
+                "quota": {
+                    "cpu": format_namespace_quota(quota_hard, "requests.cpu", "limits.cpu"),
+                    "mem": format_namespace_quota(
+                        quota_hard,
+                        "requests.memory",
+                        "limits.memory",
+                    ),
+                    "gpu": format_namespace_quota(
+                        quota_hard,
+                        "requests.nvidia.com/gpu",
+                        "limits.nvidia.com/gpu",
+                        default="0",
+                    ),
+                    "storage": format_namespace_quota(quota_hard, "requests.storage"),
+                },
                 "display_name": namespace.get("metadata", {}).get("annotations", {}).get(
                     DISPLAY_NAME_ANNOTATION
                 ),
@@ -263,12 +325,84 @@ def collect_status_groups(out_dir="./output"):
             }
         )
 
+    groups.sort(key=lambda item: item.get("namespace", ""))
     return groups
 
 
-def render_table(rows):
-    headers = ["NAME", "STATUS", "AGE", "NODE", "PORT", "GPU", "CPU", "MEM"]
-    keys = ["name", "status", "age", "node", "port", "gpu", "cpu", "mem"]
+def build_namespace_rows(groups):
+    rows = []
+    for group in groups:
+        pod_count = sum(1 for pod in group.get("pods", []) if pod.get("name") != "-")
+        quota = group.get("quota") or {}
+        rows.append(
+            {
+                "namespace": group.get("namespace", "-"),
+                "age": group.get("age", "-"),
+                "port": group.get("port", "-"),
+                "pods": str(pod_count),
+                "cpu": quota.get("cpu", "-"),
+                "mem": quota.get("mem", "-"),
+                "gpu": quota.get("gpu", "0"),
+                "storage": quota.get("storage", "-"),
+                "display_name": group.get("display_name") or "-",
+                "description": group.get("description") or "-",
+            }
+        )
+    return rows
+
+
+def find_namespace_group(groups, namespace_name):
+    for group in groups:
+        if group.get("namespace") == namespace_name:
+            return group
+    return None
+
+
+def render_pod_table(rows):
+    headers = ["NAME", "STATUS", "AGE", "NODE", "GPU", "CPU", "MEM"]
+    keys = ["name", "status", "age", "node", "gpu", "cpu", "mem"]
+
+    widths = []
+    for header, key in zip(headers, keys):
+        cell_width = max([len(header), *(len(str(row.get(key, "-"))) for row in rows)] or [len(header)])
+        widths.append(cell_width)
+
+    lines = [
+        "  ".join(header.ljust(width) for header, width in zip(headers, widths)),
+        "  ".join("-" * width for width in widths),
+    ]
+    for row in rows:
+        lines.append(
+            "  ".join(str(row.get(key, "-")).ljust(width) for key, width in zip(keys, widths))
+        )
+    return "\n".join(lines)
+
+
+def render_namespace_table(rows):
+    headers = [
+        "NAMESPACE",
+        "AGE",
+        "PORT",
+        "PODS",
+        "CPU",
+        "MEM",
+        "GPU",
+        "STORAGE",
+        "DISPLAY NAME",
+        "DESCRIPTION",
+    ]
+    keys = [
+        "namespace",
+        "age",
+        "port",
+        "pods",
+        "cpu",
+        "mem",
+        "gpu",
+        "storage",
+        "display_name",
+        "description",
+    ]
 
     widths = []
     for header, key in zip(headers, keys):
@@ -303,13 +437,18 @@ def render_groups(groups):
             heading = " | ".join(heading_parts)
         
         rendered.append(heading)
-        rendered.append(render_table(group["pods"]))
+        rendered.append(render_pod_table(group["pods"]))
     return "\n\n".join(rendered)
 
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(
-        description="Show managed namespaces and pods with status and resource columns."
+        description="Show managed namespaces, or pods in one managed namespace."
+    )
+    parser.add_argument(
+        "namespace",
+        nargs="?",
+        help="managed namespace name; if omitted, show namespace list",
     )
     parser.add_argument(
         "--json",
@@ -328,15 +467,30 @@ def main(argv=None):
     args = parse_args(argv)
     groups = collect_status_groups(args.out_dir)
 
-    if args.json:
-        print(json.dumps(groups, ensure_ascii=False, indent=2))
+    if args.namespace:
+        group = find_namespace_group(groups, args.namespace)
+        if not group:
+            print(f"managed namespace not found: {args.namespace}", file=sys.stderr)
+            raise SystemExit(1)
+
+        if args.json:
+            print(json.dumps(group, ensure_ascii=False, indent=2))
+            return
+
+        print(render_pod_table(group.get("pods", [])))
         return
 
-    if not groups:
+    namespace_rows = build_namespace_rows(groups)
+
+    if args.json:
+        print(json.dumps(namespace_rows, ensure_ascii=False, indent=2))
+        return
+
+    if not namespace_rows:
         print("no managed namespaces found")
         return
 
-    print(render_groups(groups))
+    print(render_namespace_table(namespace_rows))
 
 
 if __name__ == "__main__":

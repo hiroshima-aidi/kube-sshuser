@@ -218,8 +218,13 @@ def parse_args(argv=None):
 
     status_cmd = subparsers.add_parser(
         "status",
-        help="show managed namespaces and running pods",
-        description="Show managed namespaces and pods as a readable table.",
+        help="show managed namespaces or pods in one namespace",
+        description="Show managed namespaces, or pods in one managed namespace.",
+    )
+    status_cmd.add_argument(
+        "namespace",
+        nargs="?",
+        help="managed namespace name; if omitted, show namespace list",
     )
     status_cmd.add_argument(
         "--out-dir",
@@ -248,6 +253,8 @@ def main(argv=None):
 
     if ns.command == "status":
         forwarded = ["--out-dir", ns.out_dir]
+        if ns.namespace:
+            forwarded.append(ns.namespace)
         if ns.json:
             forwarded.append("--json")
         status.main(forwarded)
