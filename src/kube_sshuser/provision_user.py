@@ -63,11 +63,11 @@ def parse_args(argv=None):
 
     parser.add_argument("--namespace", default=None, help="override namespace")
     parser.add_argument("--out-dir", default="./output", help="output directory")
-    parser.add_argument("--login-node-label-key", default="role", help="node label key for login server")
     parser.add_argument(
-        "--login-node-label-value",
-        default="login-server",
-        help="node label value for login server",
+        "--login-node-label",
+        default="role=login-server",
+        metavar="KEY=VALUE",
+        help="node label selector for the login server node, e.g. role=login-server (default: role=login-server)",
     )
     parser.add_argument(
         "--node-address-type",
@@ -110,6 +110,12 @@ def prepare_args(args):
     args.role_name = "ssh-user-role"
     args.role_binding_name = "ssh-user-binding"
     args.deployment_name = normalize_name(f"ssh-{args.username}")
+
+    label = args.login_node_label
+    if "=" not in label:
+        raise SystemExit(f"error: --login-node-label must be in KEY=VALUE format, got: {label!r}")
+    args.login_node_label_key, args.login_node_label_value = label.split("=", 1)
+
     return args
 
 
@@ -212,7 +218,18 @@ def build_summary(args, record_path, events_path, manifest_path, node_ip, node_n
 
 def main(argv=None):
     args = prepare_args(parse_args(argv))
-    
+
+    # Refuse to overwrite an existing active user
+    from kube_sshuser.registry import load_user_record
+    existing = load_user_record(args.out_dir, args.username)
+    if existing and existing.get("status") == "active":
+        print(
+            f"error: user '{args.username}' already exists (status: active). "
+            "Use 'modify' to update name/description, or 'delete' first.",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+
     # Check if port is already in use
     available, conflicting_user = check_port_availability(args.out_dir, args.port)
     if not available:
@@ -757,10 +774,12 @@ def parse_args(argv=None):
 
     p.add_argument("--namespace", default=None, help="override namespace")
     p.add_argument("--out-dir", default="./output", help="output directory")
-
-    p.add_argument("--login-node-label-key", default="role", help="node label key for login server")
-    p.add_argument("--login-node-label-value", default="login-server", help="node label value for login server")
-
+    p.add_argument(
+        "--login-node-label",
+        default="role=login-server",
+        metavar="KEY=VALUE",
+        help="node label selector for the login server node, e.g. role=login-server (default: role=login-server)",
+    )
     p.add_argument(
         "--node-address-type",
         default="ExternalIP",
@@ -784,6 +803,11 @@ def main(argv=None):
     args.role_name = "ssh-user-role"
     args.role_binding_name = "ssh-user-binding"
     args.deployment_name = normalize_name(f"ssh-{username_norm}")
+
+    label = args.login_node_label
+    if "=" not in label:
+        raise SystemExit(f"error: --login-node-label must be in KEY=VALUE format, got: {label!r}")
+    args.login_node_label_key, args.login_node_label_value = label.split("=", 1)
 
     public_key = resolve_public_key(args)
 

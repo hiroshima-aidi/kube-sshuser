@@ -1,12 +1,13 @@
 # kube-sshuser
 
-Kubernetes 上でユーザごとの SSH 環境を作成・削除するための管理者向け CLI です。
+Kubernetes 上でユーザごとの SSH 環境を作成・変更・削除するための管理者向け CLI です。
 
 このリポジトリには kube-sshuser 本体のみを含みます。
 
 ## できること
 
 - `kube-sshuser create`: namespace / PVC / ResourceQuota / SA / RBAC / SSH Deployment を作成
+- `kube-sshuser modify`: 稼働中のユーザ環境を Pod を再起動せずに変更（表示名・説明・クォータ・PVC 拡張）
 - `kube-sshuser delete`: 作成済み環境の削除
 - `kube-sshuser show`: ユーザ単位のレジストリ情報表示
 - `kube-sshuser list`: レジストリ一覧表示（status フィルタ対応）
@@ -29,7 +30,6 @@ pip install "git+https://github.com/hiroshima-aidi/kube-sshuser.git"
 
 ### 2) /opt/venv にインストールする場合
 
-`/opt/venv` へのインストールは可能です。
 `/opt` 配下の作成に権限が必要な環境では `sudo` を付けてください。
 
 ```bash
@@ -51,21 +51,12 @@ echo 'export PATH="/opt/venv/bin:$PATH"' >> ~/.bashrc
 source ~/.bashrc
 ```
 
-インストール後、以下のコマンドが使えます（PATH 設定後）。
-
-- `kube-sshuser`
-
 ## 使い方
 
 ### ユーザ作成
 
-```bash
-kube-sshuser create taro --public-key-file /path/to/key.pub --image ghcr.io/hiroshima-aidi/ssh-for-k8s:latest --port 2222
-```
-
-`create` は内部処理を呼び出してユーザ環境を作成します。
-
-例:
+既存のアクティブなユーザに同じ名前で `create` を実行するとエラーで停止します。
+変更したい場合は `modify`、再作成したい場合は先に `delete` してください。
 
 ```bash
 kube-sshuser create taro \
@@ -79,13 +70,30 @@ kube-sshuser create taro \
 	--gpu-quota 1
 ```
 
+### ユーザ変更
+
+Pod を再起動せずに変更できるフィールドのみ対象です。
+`--name` / `--desc` はアノテーションの更新、`--gpu-quota` / `--cpu-quota` / `--memory-quota` は ResourceQuota の patch、`--storage` は PVC の拡張（縮小不可）です。
+
+```bash
+# 表示名・説明の変更
+kube-sshuser modify taro --name "Taro Yamada" --desc "M2 student"
+
+# クォータの変更
+kube-sshuser modify taro --gpu-quota 2 --memory-quota 128Gi --cpu-quota 32
+
+# PVC 拡張
+kube-sshuser modify taro --storage 200Gi
+
+# 組み合わせ自由
+kube-sshuser modify taro --name "Taro Yamada" --gpu-quota 4 --storage 200Gi
+```
+
 ### ユーザ削除
 
 ```bash
 kube-sshuser delete taro --yes
 ```
-
-`delete` は内部処理を呼び出してユーザ環境を削除します。
 
 ### レジストリ確認
 
@@ -119,10 +127,10 @@ namespace ごとに表を分けて表示します。
 
 - `--public-key-file` / `--public-key-string` (どちらか必須)
 - `--image` (必須)
+- `--port` (必須)
 - `--name` (人間向け表示名)
 - `--desc` (補足説明)
 - `--pull` (`always` / `if-not-present` / `never`, default: `if-not-present`)
-- `--port` (必須)
 - `--storage` (default: `100Gi`)
 - `--pvc-name` (default: `workspace`)
 - `--gpu-quota` (default: `1`)
@@ -133,9 +141,19 @@ namespace ごとに表を分けて表示します。
 - `--ssh-memory-request`, `--ssh-memory-limit`
 - `--namespace`
 - `--out-dir` (default: `./output`)
-- `--login-node-label-key` (default: `role`)
-- `--login-node-label-value` (default: `login-server`)
+- `--login-node-label` (default: `role=login-server`) — ログインノードを選択するラベル
 - `--node-address-type` (`ExternalIP` / `InternalIP`, default: `ExternalIP`)
+
+`kube-sshuser modify <user> ...` の主なオプション:
+
+- `--name` (表示名)
+- `--desc` (説明)
+- `--gpu-quota` (GPU クォータ)
+- `--cpu-quota` (CPU クォータ)
+- `--memory-quota` (メモリクォータ)
+- `--storage` (PVC 拡張サイズ、縮小不可)
+- `--pvc-name` (変更対象 PVC 名、省略時はレジストリから取得)
+- `--out-dir` (default: `./output`)
 
 `kube-sshuser delete <user> ...` の主なオプション:
 
@@ -155,7 +173,7 @@ namespace ごとに表を分けて表示します。
 
 - `./output/<user>/provision-<user>.yaml`: 生成マニフェスト
 - `./output/_registry/users/<user>.json`: ユーザの最新状態
-- `./output/_registry/events.ndjson`: 監査イベントログ
+- `./output/_registry/events.ndjson`: 監査イベントログ（create / modify / delete を記録）
 
 公開鍵の平文はレジストリに保存せず、`fingerprint_sha256` を記録します。
 

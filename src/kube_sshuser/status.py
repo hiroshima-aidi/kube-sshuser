@@ -4,6 +4,7 @@ import argparse
 import json
 
 from kube_sshuser.common import humanize_age, parse_k8s_timestamp, run
+from kube_sshuser.registry import list_user_records
 
 
 MANAGED_BY_LABEL = "app.kubernetes.io/managed-by=provision-user"
@@ -155,7 +156,20 @@ def add_quantities(existing, new_value):
     return f"{existing}+{new_value}"
 
 
-def collect_status_groups():
+def collect_status_groups(out_dir="./output"):
+    # Load port information from registry
+    port_by_namespace = {}
+    try:
+        records = list_user_records(out_dir)
+        for record in records:
+            namespace = record.get("namespace", {}).get("name")
+            port = record.get("ssh", {}).get("port")
+            if namespace and port:
+                port_by_namespace[namespace] = port
+    except Exception:
+        # If registry is not available, continue without port info
+        pass
+    
     namespaces = kubectl_get_json(
         [
             "kubectl",
@@ -199,6 +213,8 @@ def collect_status_groups():
         )
 
         pod_rows = []
+        port = port_by_namespace.get(namespace_name, "-")
+        
         if not namespace_pods:
             pod_rows.append(
                 {
@@ -206,6 +222,7 @@ def collect_status_groups():
                     "status": "NoPods",
                     "age": namespace_age,
                     "node": "-",
+                    "port": port,
                     "gpu": "0",
                     "cpu": "-",
                     "mem": "-",
@@ -222,6 +239,7 @@ def collect_status_groups():
                             parse_k8s_timestamp(pod.get("metadata", {}).get("creationTimestamp"))
                         ),
                         "node": pod.get("spec", {}).get("nodeName") or "-",
+                        "port": port,
                         "gpu": resources["gpu"],
                         "cpu": resources["cpu"],
                         "mem": resources["mem"],
@@ -246,8 +264,8 @@ def collect_status_groups():
 
 
 def render_table(rows):
-    headers = ["NAME", "STATUS", "AGE", "NODE", "GPU", "CPU", "MEM"]
-    keys = ["name", "status", "age", "node", "gpu", "cpu", "mem"]
+    headers = ["NAME", "STATUS", "AGE", "NODE", "PORT", "GPU", "CPU", "MEM"]
+    keys = ["name", "status", "age", "node", "port", "gpu", "cpu", "mem"]
 
     widths = []
     for header, key in zip(headers, keys):
@@ -295,12 +313,17 @@ def parse_args(argv=None):
         action="store_true",
         help="print raw JSON instead of a formatted table",
     )
+    parser.add_argument(
+        "--out-dir",
+        default="./output",
+        help="base output directory for registry (default: ./output)",
+    )
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
-    groups = collect_status_groups()
+    groups = collect_status_groups(args.out_dir)
 
     if args.json:
         print(json.dumps(groups, ensure_ascii=False, indent=2))

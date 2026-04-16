@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from kube_sshuser import delete_user, provision_user, status
+from kube_sshuser import delete_user, modify_user, provision_user, status
 from kube_sshuser.registry import list_user_records, load_user_record
 
 
@@ -151,6 +151,21 @@ def parse_args(argv=None):
         help="extra arguments passed to provision-user",
     )
 
+    modify = subparsers.add_parser(
+        "modify",
+        help="modify non-disruptive fields of an existing user (name, description, quotas, storage)",
+        description="Update fields of an active SSH user without restarting any Pods.",
+    )
+    modify.add_argument("user", help="logical username, e.g. taro")
+    modify.add_argument("--name", dest="display_name", default=None, help="new human-readable name")
+    modify.add_argument("--desc", dest="description", default=None, help="new free-text description")
+    modify.add_argument("--gpu-quota", type=int, default=None, help="new GPU quota")
+    modify.add_argument("--cpu-quota", default=None, help="new CPU quota, e.g. 16")
+    modify.add_argument("--memory-quota", default=None, help="new memory quota, e.g. 64Gi")
+    modify.add_argument("--storage", default=None, help="new PVC size (expand only), e.g. 200Gi")
+    modify.add_argument("--pvc-name", default=None, help="PVC name to resize (default: from registry)")
+    modify.add_argument("--out-dir", default="./output", help="base output directory")
+
     delete = subparsers.add_parser(
         "delete",
         help="delete one provisioned user environment",
@@ -207,6 +222,11 @@ def parse_args(argv=None):
         description="Show managed namespaces and pods as a readable table.",
     )
     status_cmd.add_argument(
+        "--out-dir",
+        default="./output",
+        help="base output directory for registry (default: ./output)",
+    )
+    status_cmd.add_argument(
         "--json",
         action="store_true",
         help="print raw JSON instead of a formatted table",
@@ -227,8 +247,30 @@ def main(argv=None):
         return
 
     if ns.command == "status":
-        forwarded = ["--json"] if ns.json else []
+        forwarded = ["--out-dir", ns.out_dir]
+        if ns.json:
+            forwarded.append("--json")
         status.main(forwarded)
+        return
+
+    if ns.command == "modify":
+        forwarded = ["--user", ns.user]
+        if ns.display_name is not None:
+            forwarded += ["--name", ns.display_name]
+        if ns.description is not None:
+            forwarded += ["--desc", ns.description]
+        if ns.gpu_quota is not None:
+            forwarded += ["--gpu-quota", str(ns.gpu_quota)]
+        if ns.cpu_quota is not None:
+            forwarded += ["--cpu-quota", ns.cpu_quota]
+        if ns.memory_quota is not None:
+            forwarded += ["--memory-quota", ns.memory_quota]
+        if ns.storage is not None:
+            forwarded += ["--storage", ns.storage]
+        if ns.pvc_name is not None:
+            forwarded += ["--pvc-name", ns.pvc_name]
+        forwarded += ["--out-dir", ns.out_dir]
+        modify_user.main(forwarded)
         return
 
     forwarded = ["--user", ns.user, *ns.args]
