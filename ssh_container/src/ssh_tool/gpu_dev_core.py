@@ -7,6 +7,7 @@ from .gpu_dev_defaults import DEFAULT_MEMORY_REQUEST
 from .gpu_dev_defaults import DEFAULT_MOUNT_PATH
 from .gpu_dev_defaults import DEFAULT_NODE_LABEL_KEY
 from .gpu_dev_defaults import DEFAULT_NODE_LABEL_VALUE
+from .gpu_dev_defaults import DEFAULT_PULL
 from .gpu_dev_defaults import DEFAULT_PVC
 from .gpu_dev_defaults import DEFAULT_RUNTIME_CLASS
 from .gpu_dev_defaults import DEFAULT_TTL

@@ -1,6 +1,7 @@
 DEFAULT_TTL = 3600
 DEFAULT_GPU = 1
 DEFAULT_IMAGE = "nvidia/cuda:12.2.0-runtime-ubuntu22.04"
+DEFAULT_PULL = "IfNotPresent"
 DEFAULT_PVC = "workspace"
 DEFAULT_MOUNT_PATH = "/workspace"
 DEFAULT_RUNTIME_CLASS = "nvidia"

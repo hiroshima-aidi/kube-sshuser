@@ -23,64 +23,116 @@ ssh -p `<PORT>`{=html} `<USER>`{=html}@`<HOST>`{=html}
 ### gpu-dev Usage
 
 ```bash
-gpu-dev [OPTIONS]
+gpu-dev up [OPTIONS]
+gpu-dev down [--name NAME | --all]
+gpu-dev status
 ```
 
-デフォルトでは、利用者ごとの GPU 開発 Pod に接続し、終了時に新規作成Podのみ削除します。
+`up` は GPU 開発 Pod を作成または再利用して接続します。
+`down` は Pod を削除します。
+`status` は自分の gpu-dev Pod 一覧を表示します。
 
-### gpu-dev オプション
+### gpu-dev up オプション
 
+-   --file : `up` オプションを読み込む YAML ファイルパス（CLI指定が優先）
 -   --ttl : Pod の生存時間（秒）。デフォルト: 3600
 -   --gpu : 使用する GPU 数。デフォルト: 1
 -   --image : GPU Pod のコンテナイメージ。デフォルト: nvidia/cuda:12.2.0-runtime-ubuntu22.04
+-   --pull : イメージ取得ポリシー（always / if-not-present / never）。デフォルト: if-not-present
 -   --name : 論理Pod名（例: test1）。実Pod名は `gpu-dev-<owner>-<name>`
 -   --pvc : マウントする PVC 名。デフォルト: workspace
 -   --mount-path : コンテナ内マウント先。デフォルト: /workspace
+-   --workdir : コンテナ内作業ディレクトリ。デフォルトは `--mount-path`
 -   --runtime-class : RuntimeClass 名。デフォルト: nvidia
--   --node-label-key : nodeSelector のキー。デフォルト: gpu
--   --node-label-value : nodeSelector の値。デフォルト: true
+-   --node-selector : nodeSelector を `KEY=VALUE` 形式で指定。デフォルト: `gpu=true`
 -   --cpu-request : CPU request。デフォルト: 2
 -   --cpu-limit : CPU limit。デフォルト: 4
 -   --memory-request : メモリ request。デフォルト: 8Gi
 -   --memory-limit : メモリ limit。デフォルト: 16Gi
+-   --env : コンテナ環境変数（`KEY=VALUE`）。複数指定可能
+-   --shell : `kubectl exec` で起動するシェル。デフォルト: bash
 -   --keep : セッション終了後も Pod を削除せず保持（新規作成時のみ有効）
 -   --forward : ポートフォワード指定（`local:remote`）。複数指定可能
--   --list : 自分の gpu-dev Pod 一覧を表示して終了
--   --delete : 対象 gpu-dev Pod を削除して終了
--   --delete-all : 自分の gpu-dev Pod を全削除して終了
+
+### gpu-dev down オプション
+
+-   --name : 論理Pod名（例: test1）。未指定時は default Pod を対象
+-   --all : 自分の gpu-dev Pod を全削除
 
 ### 利用例
 
 ```bash
 # デフォルト設定で接続
-gpu-dev
+gpu-dev up
+
+# YAMLファイルから設定を読み込んで起動
+gpu-dev up --file gpu-dev.yaml
 
 # GPU数とTTLを指定して起動
-gpu-dev --gpu 2 --ttl 7200
+gpu-dev up --gpu 2 --ttl 7200
 
 # イメージとリソースを指定
-gpu-dev \
+gpu-dev up \
   --image nvidia/cuda:12.2.0-devel-ubuntu22.04 \
   --cpu-request 4 --cpu-limit 8 \
   --memory-request 16Gi --memory-limit 32Gi
 
 # 論理名をつけてPodを保持
-gpu-dev --name exp1 --keep
+gpu-dev up --name exp1 --keep
+
+# --pull always を使う
+gpu-dev up --name exp1 --pull always
+# 既存Podがある場合はpull設定は効かないため、先に削除してからupする
+gpu-dev down --name exp1 && gpu-dev up --name exp1 --pull always
+
+# シェルと作業ディレクトリを指定
+gpu-dev up --shell sh --workdir /workspace/project
+
+# 環境変数を渡す
+gpu-dev up --env HF_HOME=/workspace/.cache/hf --env WANDB_MODE=offline
 
 # ポートフォワード（複数可）
-gpu-dev --name exp1 --forward 8888:8888 --forward 6006:6006
+gpu-dev up --name exp1 --forward 8888:8888 --forward 6006:6006
 
 # Pod一覧表示
-gpu-dev --list
+gpu-dev status
 
 # 指定Podを削除
-gpu-dev --name exp1 --delete
+gpu-dev down --name exp1
 
 # 自分のgpu-dev Podを全削除
-gpu-dev --delete-all
+gpu-dev down --all
 ```
 
-既存Podがある場合、`--gpu` などの作成時リソースオプションは無視され、既存Podへ接続します。
+既存Podがある場合、`up` の作成時オプション（`--gpu` など）は無視され、既存Podへ接続します。
+また既存Pod再利用時は `--pull` の設定は反映されません（警告を表示）。
+
+### YAML 設定ファイル例
+
+```yaml
+name: exp1
+image: nvidia/cuda:12.2.0-devel-ubuntu22.04
+pull: always
+gpu: 2
+ttl: 7200
+pvc: workspace
+mount-path: /workspace
+workdir: /workspace/project
+runtime-class: nvidia
+node-selector: gpu=true
+cpu-request: "4"
+cpu-limit: "8"
+memory-request: 16Gi
+memory-limit: 32Gi
+shell: bash
+keep: true
+env:
+  HF_HOME: /workspace/.cache/hf
+  WANDB_MODE: offline
+forward:
+  - 8888:8888
+  - 6006:6006
+```
 
 ### データ保存
 
