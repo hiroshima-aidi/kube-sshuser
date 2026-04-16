@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from kube_sshuser import delete_user, modify_user, provision_user, status
+from kube_sshuser import delete_user, modify_user, provision_user, status, terminate_pod
 from kube_sshuser.registry import list_user_records, load_user_record
 
 
@@ -237,6 +237,43 @@ def parse_args(argv=None):
         help="print raw JSON instead of a formatted table",
     )
 
+    terminate_cmd = subparsers.add_parser(
+        "terminate",
+        help="delete one pod or all pods in a managed namespace",
+        description=(
+            "Delete one pod, or all pods, in a managed namespace. "
+            "If a controller owns the pod, Kubernetes may recreate it."
+        ),
+    )
+    terminate_cmd.add_argument("namespace", help="managed namespace name, e.g. ns-taro")
+    terminate_cmd.add_argument("pod", nargs="?", help="pod name to delete")
+    terminate_cmd.add_argument(
+        "--all",
+        action="store_true",
+        help="delete all pods in the namespace",
+    )
+    terminate_cmd.add_argument(
+        "--force",
+        action="store_true",
+        help="force delete with grace-period 0",
+    )
+    terminate_cmd.add_argument(
+        "--grace-period",
+        type=int,
+        default=None,
+        help="override pod termination grace period in seconds",
+    )
+    terminate_cmd.add_argument(
+        "--yes",
+        action="store_true",
+        help="do not ask for confirmation",
+    )
+    terminate_cmd.add_argument(
+        "--json",
+        action="store_true",
+        help="print raw JSON result",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -258,6 +295,23 @@ def main(argv=None):
         if ns.json:
             forwarded.append("--json")
         status.main(forwarded)
+        return
+
+    if ns.command == "terminate":
+        forwarded = ["--namespace", ns.namespace]
+        if ns.pod:
+            forwarded += ["--pod", ns.pod]
+        if ns.all:
+            forwarded.append("--all")
+        if ns.force:
+            forwarded.append("--force")
+        if ns.grace_period is not None:
+            forwarded += ["--grace-period", str(ns.grace_period)]
+        if ns.yes:
+            forwarded.append("--yes")
+        if ns.json:
+            forwarded.append("--json")
+        terminate_pod.main(forwarded)
         return
 
     if ns.command == "modify":
