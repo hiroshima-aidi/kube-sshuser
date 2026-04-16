@@ -307,7 +307,6 @@ def main():
     namespace = get_namespace_or_exit()
 
     owner = build_owner()
-    pod_name = build_pod_name(owner, args.name)
 
     env = os.environ.copy()
     env.pop("KUBECONFIG", None)
@@ -320,11 +319,14 @@ def main():
         if args.all:
             delete_all_pods(namespace, owner, env=env)
         else:
+            pod_name = build_pod_name(owner, args.name)
             delete_pod(namespace, pod_name, env=env)
         return
 
     if args.command != "up":
         raise SystemExit(f"unknown command: {args.command}")
+
+    pod_name = build_pod_name(owner, args.name)
 
     forwards = validate_forwards(args.forward)
 
