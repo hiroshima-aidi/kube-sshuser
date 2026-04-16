@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "kube-sshuser"
-version = "0.2.1"
+version = "0.2.2"
 description = "Admin tools for provisioning user SSH containers and Kubernetes resources"
 requires-python = ">=3.9"
 

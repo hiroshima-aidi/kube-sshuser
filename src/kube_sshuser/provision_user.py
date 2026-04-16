@@ -20,6 +20,7 @@ from kube_sshuser.registry import (
     append_event,
     build_operation_id,
     extract_public_key_metadata,
+    list_user_records,
     update_user_record,
     utcnow_iso,
 )
@@ -76,6 +77,27 @@ def parse_args(argv=None):
     )
 
     return parser.parse_args(argv)
+
+
+def check_port_availability(out_dir: str, port: int) -> tuple[bool, str | None]:
+    """
+    Check if the specified port is already in use by an active or deleting user.
+    
+    Returns:
+        (available: bool, conflicting_user: str | None)
+        If available is False, conflicting_user contains the username using the port.
+    """
+    records = list_user_records(out_dir)
+    for record in records:
+        status = record.get("status")
+        record_port = record.get("ssh", {}).get("port")
+        
+        # Only check active and deleting users (not deleted ones)
+        if status in ("active", "deleting") and record_port == port:
+            return False, record.get("user")
+    
+    return True, None
+
 
 
 def prepare_args(args):
@@ -190,6 +212,16 @@ def build_summary(args, record_path, events_path, manifest_path, node_ip, node_n
 
 def main(argv=None):
     args = prepare_args(parse_args(argv))
+    
+    # Check if port is already in use
+    available, conflicting_user = check_port_availability(args.out_dir, args.port)
+    if not available:
+        print(
+            f"error: port {args.port} is already in use by user '{conflicting_user}'",
+            file=sys.stderr,
+        )
+        raise SystemExit(1)
+    
     public_key = resolve_public_key(args)
 
     out_dir = (Path(args.out_dir) / args.username).resolve()
