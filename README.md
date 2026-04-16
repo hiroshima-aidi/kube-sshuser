@@ -53,6 +53,7 @@ gpu-dev status
 -   --shell : `kubectl exec` で起動するシェル。デフォルト: bash
 -   --keep : セッション終了後も Pod を削除せず保持（新規作成時のみ有効）
 -   --forward : ポートフォワード指定（`local:remote`）。複数指定可能
+  （ServiceAccount に `pods/portforward` の create 権限が必要）
 
 ### gpu-dev down オプション
 
@@ -154,6 +155,23 @@ make ssh-build IMAGE=docker-ssh:latest
 
 -   kubeconfig はユーザに渡さない
 -   SSH Pod には admin kubeconfig を配置しない（ServiceAccount トークンで namespace 内 API を利用する設計）
+
+### gpu-dev に必要な最小RBAC（例）
+
+`gpu-dev up --forward ...` を使う場合は、ServiceAccount に
+`pods/portforward` の create 権限が必要です。未付与時は port-forward を
+スキップし、Pod にはそのまま `exec` で接続します。
+
+```yaml
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: ssh-user-gpu-dev
+rules:
+  - apiGroups: [""]
+    resources: ["pods", "pods/exec", "pods/log", "pods/portforward"]
+    verbs: ["get", "list", "watch", "create", "delete"]
+```
 
 ------------------------------------------------------------------------
 

@@ -97,8 +97,47 @@ def validate_forwards(forwards: list[str]) -> list[str]:
     return validated
 
 
+def can_create_pod_portforward(namespace: str, env=None) -> Optional[bool]:
+    result = subprocess.run(
+        [
+            "kubectl",
+            "-n",
+            namespace,
+            "auth",
+            "can-i",
+            "create",
+            "pods/portforward",
+        ],
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+    if result.returncode != 0:
+        return None
+
+    answer = result.stdout.strip().lower()
+    if answer in {"yes", "true"}:
+        return True
+    if answer in {"no", "false"}:
+        return False
+    return None
+
+
 def start_port_forward(namespace: str, pod_name: str, forwards: list[str], env=None):
     if not forwards:
+        return None
+
+    can_forward = can_create_pod_portforward(namespace, env=env)
+    if can_forward is False:
+        print(
+            "[gpu-dev] warning: skip port-forward because this ServiceAccount "
+            "cannot create pods/portforward"
+        )
+        print(
+            "[gpu-dev] hint: add RBAC permission: apiGroups=[''], "
+            "resources=['pods/portforward'], verbs=['create']"
+        )
         return None
 
     cmd = [

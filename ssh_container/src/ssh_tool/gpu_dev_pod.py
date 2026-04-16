@@ -43,16 +43,16 @@ def has_non_default_create_flags(args) -> bool:
 
 
 def _build_env_yaml(env_items: list[str]) -> str:
-    if not env_items:
-        return ""
+  if not env_items:
+    return ""
 
-    lines = ["          env:"]
-    for item in env_items:
-        key, value = item.split("=", 1)
-        escaped_value = value.replace("\\", "\\\\").replace('"', '\\"')
-        lines.append(f"            - name: {key}")
-        lines.append(f'              value: "{escaped_value}"')
-    return "\n" + "\n".join(lines)
+  lines = ["              env:"]
+  for item in env_items:
+    key, value = item.split("=", 1)
+    escaped_value = value.replace("\\", "\\\\").replace('"', '\\"')
+    lines.append(f"                - name: {key}")
+    lines.append(f'                  value: "{escaped_value}"')
+  return "\n" + "\n".join(lines)
 
 
 def build_pod_manifest(args, pod_name: str, owner: str) -> str:
