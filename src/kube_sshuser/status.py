@@ -7,7 +7,7 @@ from kube_sshuser.common import humanize_age, parse_k8s_timestamp, run
 from kube_sshuser.registry import list_user_records
 
 
-MANAGED_BY_LABEL = "app.kubernetes.io/managed-by=provision-user"
+MANAGED_NAMESPACE_LABEL = "app.kubernetes.io/managed-by=provision-user"
 DISPLAY_NAME_ANNOTATION = "provision-user.openai.local/display-name"
 DESCRIPTION_ANNOTATION = "provision-user.openai.local/description"
 
@@ -176,19 +176,22 @@ def collect_status_groups(out_dir="./output"):
             "get",
             "namespaces",
             "-l",
-            MANAGED_BY_LABEL,
+            MANAGED_NAMESPACE_LABEL,
             "-o",
             "json",
         ]
     )
+    managed_namespace_names = {
+        item.get("metadata", {}).get("name")
+        for item in namespaces.get("items", [])
+        if item.get("metadata", {}).get("name")
+    }
     pods = kubectl_get_json(
         [
             "kubectl",
             "get",
             "pods",
             "-A",
-            "-l",
-            MANAGED_BY_LABEL,
             "-o",
             "json",
         ]
@@ -197,7 +200,7 @@ def collect_status_groups(out_dir="./output"):
     pods_by_namespace = {}
     for pod in pods.get("items", []):
         namespace = pod.get("metadata", {}).get("namespace")
-        if not namespace:
+        if not namespace or namespace not in managed_namespace_names:
             continue
         pods_by_namespace.setdefault(namespace, []).append(pod)
 

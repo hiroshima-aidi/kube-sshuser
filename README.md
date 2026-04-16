@@ -109,7 +109,7 @@ kube-sshuser status
 kube-sshuser status --json
 ```
 
-`status` は Kubernetes クラスタを直接参照し、管理対象 namespace と pod を以下の列で表示します。
+`status` は Kubernetes クラスタを直接参照し、`app.kubernetes.io/managed-by=provision-user` が付いた namespace を対象に、その namespace 内の Pod を以下の列で表示します。
 
 namespace ごとに表を分けて表示します。
 
