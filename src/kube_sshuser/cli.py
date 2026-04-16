@@ -4,7 +4,7 @@ import argparse
 import json
 import sys
 
-from kube_sshuser import delete_user, provision_user
+from kube_sshuser import delete_user, provision_user, status
 from kube_sshuser.registry import list_user_records, load_user_record
 
 
@@ -31,6 +31,7 @@ def show_user(args):
 
     ssh = record.get("ssh", {})
     ssh_key = record.get("ssh_key", {})
+    profile = record.get("profile", {})
     namespace = record.get("namespace", {})
     spec = namespace.get("spec", {})
     requested = spec.get("requested", {})
@@ -39,6 +40,8 @@ def show_user(args):
     paths = record.get("paths", {})
 
     print(f"User: {_fmt(record.get('user'))}")
+    print(f"Name: {_fmt(profile.get('name'))}")
+    print(f"Description: {_fmt(profile.get('description'))}")
     print(f"Status: {_fmt(record.get('status'))}")
     print(f"Created At: {_fmt(record.get('created_at'))}")
     print(f"Updated At: {_fmt(record.get('updated_at'))}")
@@ -109,11 +112,12 @@ def list_users(args):
         print(f"[{name}] {len(items)}")
         for item in sorted(items, key=lambda x: x.get("user", "")):
             user = _fmt(item.get("user"))
+            display_name = _fmt(item.get("profile", {}).get("name"))
             namespace = _fmt(item.get("namespace", {}).get("name"))
             endpoint = _fmt(item.get("ssh", {}).get("endpoint"))
             updated_at = _fmt(item.get("updated_at"))
             print(
-                f"- user={user} namespace={namespace} endpoint={endpoint} updated_at={updated_at}"
+                f"- user={user} name={display_name} namespace={namespace} endpoint={endpoint} updated_at={updated_at}"
             )
         print()
 
@@ -135,6 +139,10 @@ def parse_args(argv=None):
         "create",
         help="provision one user environment",
         description="Provision one namespace + PVC + quota + SA/RBAC + SSH deployment.",
+        epilog=(
+            "Example: kube-sshuser create taro --name 'Taro Yamada' --desc 'M1 student' "
+            "--public-key-file /path/to/key.pub --image ghcr.io/example/image:latest --port 2222"
+        ),
     )
     create.add_argument("user", help="logical username, e.g. taro")
     create.add_argument(
@@ -193,6 +201,17 @@ def parse_args(argv=None):
         help="print raw JSON array instead of formatted text",
     )
 
+    status_cmd = subparsers.add_parser(
+        "status",
+        help="show managed namespaces and running pods",
+        description="Show managed namespaces and pods as a readable table.",
+    )
+    status_cmd.add_argument(
+        "--json",
+        action="store_true",
+        help="print raw JSON instead of a formatted table",
+    )
+
     return parser.parse_args(argv)
 
 
@@ -205,6 +224,11 @@ def main(argv=None):
 
     if ns.command == "list":
         list_users(ns)
+        return
+
+    if ns.command == "status":
+        forwarded = ["--json"] if ns.json else []
+        status.main(forwarded)
         return
 
     forwarded = ["--user", ns.user, *ns.args]

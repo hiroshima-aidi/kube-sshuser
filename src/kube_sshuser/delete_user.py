@@ -2,46 +2,12 @@
 
 import argparse
 import json
-import re
 import shutil
-import shlex
-import subprocess
 import sys
 from pathlib import Path
 
+from kube_sshuser.common import normalize_name, run
 from kube_sshuser.registry import append_event, build_operation_id, update_user_record, utcnow_iso
-
-
-def run(cmd, check=True, capture_output=True):
-    if isinstance(cmd, str):
-        shell = True
-        printable = cmd
-    else:
-        shell = False
-        printable = " ".join(shlex.quote(str(x)) for x in cmd)
-
-    print(f"[cmd] {printable}", file=sys.stderr)
-    return subprocess.run(
-        cmd,
-        text=True,
-        check=check,
-        capture_output=capture_output,
-        shell=shell,
-    )
-
-
-def normalize_name(value: str) -> str:
-    value = value.lower()
-    value = re.sub(r"[^a-z0-9-]+", "-", value)
-    value = re.sub(r"-{2,}", "-", value)
-    value = value.strip("-")
-    if not value:
-        raise ValueError("normalized name became empty")
-    if len(value) > 63:
-        value = value[:63].rstrip("-")
-    if not value:
-        raise ValueError("normalized name became empty after truncation")
-    return value
 
 
 def namespace_exists(namespace: str) -> bool:
