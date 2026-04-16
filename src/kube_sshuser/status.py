@@ -22,9 +22,64 @@ def kubectl_get_json(cmd):
         raise RuntimeError("failed to decode kubectl JSON output") from exc
 
 
+def normalize_cpu_value(cpu_str):
+    """Convert CPU value to normalized decimal format (e.g., '100m' -> '0.1', '1' -> '1')"""
+    if not cpu_str:
+        return None
+    cpu_str = str(cpu_str).strip()
+    
+    # Handle adding quantities like "100m+100m"
+    if "+" in cpu_str:
+        parts = cpu_str.split("+")
+        try:
+            total_millicores = 0
+            for part in parts:
+                part = part.strip()
+                if part.endswith("m"):
+                    total_millicores += int(part[:-1])
+                else:
+                    # Convert core format to millicores, add, convert back
+                    total_millicores += int(float(part) * 1000)
+            cores = total_millicores / 1000
+            if cores == int(cores):
+                return str(int(cores))
+            return f"{cores:.10g}"
+        except (ValueError, ZeroDivisionError):
+            return cpu_str
+    
+    if cpu_str.endswith("m"):
+        # millicores to cores: 100m -> 0.1
+        try:
+            millicores = int(cpu_str[:-1])
+            cores = millicores / 1000
+            # Format nicely: 0.1, 0.5, 1, 2 (remove unnecessary decimals)
+            if cores == int(cores):
+                return str(int(cores))
+            return f"{cores:.10g}"  # Remove trailing zeros
+        except ValueError:
+            return cpu_str
+    else:
+        # Already in core format, just clean it up
+        try:
+            cores = float(cpu_str)
+            if cores == int(cores):
+                return str(int(cores))
+            return f"{cores:.10g}"
+        except ValueError:
+            return cpu_str
+
+
 def format_quantity(requests, limits, resource_name):
     request_value = (requests or {}).get(resource_name)
     limit_value = (limits or {}).get(resource_name)
+    
+    # Special handling for CPU: normalize to decimal format
+    if resource_name == "cpu":
+        if request_value:
+            request_value = normalize_cpu_value(request_value)
+        if limit_value:
+            limit_value = normalize_cpu_value(limit_value)
+    
     if request_value and limit_value:
         return f"{request_value}/{limit_value}"
     return request_value or limit_value or "-"
