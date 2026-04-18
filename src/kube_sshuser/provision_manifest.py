@@ -43,7 +43,7 @@ def build_annotations_block(display_name, description, indent: str) -> str:
     return "\n" + "\n".join(lines)
 
 
-def build_manifest(args, public_key: str) -> str:
+def build_manifest(args, public_key: str, node_port: int) -> str:
     quota_block = ""
     if args.gpu_quota >= 0:
         quota_block = f"""\
@@ -189,7 +189,6 @@ spec:
           ports:
             - name: ssh
               containerPort: 22
-              hostPort: {args.port}
               protocol: TCP
           env:
             - name: SSH_USER
@@ -225,4 +224,23 @@ spec:
               port: 22
             initialDelaySeconds: 10
             periodSeconds: 10
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {args.service_name}
+  namespace: {args.namespace}
+  labels:
+    app.kubernetes.io/managed-by: provision-user
+    provision-user.openai.local/user: {args.username}
+spec:
+  type: NodePort
+  selector:
+    app.kubernetes.io/name: ssh-user
+    provision-user.openai.local/user: {args.username}
+  ports:
+    - name: ssh
+      port: 22
+      targetPort: 22
+      nodePort: {node_port}
 """
