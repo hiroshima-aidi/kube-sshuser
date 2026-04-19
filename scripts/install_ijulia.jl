@@ -7,6 +7,12 @@ import Pkg
 # Prevent IJulia build from creating the default --project=@. kernel.
 ENV["IJULIA_NODEFAULTKERNEL"] = "1"
 
+# Explicitly activate the versioned global environment so that Pkg.add installs
+# packages to the same location the kernel will load from (--project=@vX.Y).
+# Without this, Julia may target a temporary environment and packages become
+# invisible to the kernel.
+Pkg.activate("v$(VERSION.major).$(VERSION.minor)"; shared=true)
+
 Pkg.update()
 Pkg.add([
     "BenchmarkTools",
