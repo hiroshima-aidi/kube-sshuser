@@ -137,6 +137,7 @@ _validate-flavor:
 .PHONY: build
 build: _validate-stack
 	$(DOCKER) build \
+		--platform $(PLATFORM) \
 		-t $(LOCAL_IMAGE) \
 		-f $(DOCKERFILE) \
 		--build-arg WITH_IJULIA=$(WITH_IJULIA) \
@@ -192,6 +193,7 @@ push-all: push-cpu push-cuda12.2 push-cuda11.8
 .PHONY: build-flavor
 build-flavor: _validate-stack _validate-flavor
 	$(DOCKER) build \
+		--platform $(PLATFORM) \
 		-f $(FLAVOR_DOCKERFILE) \
 		--build-arg BASE_IMAGE=$(LOCAL_IMAGE) \
 		-t $(FLAVOR_LOCAL_IMAGE) \
