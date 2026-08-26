@@ -142,9 +142,10 @@ CLI の挙動を変えたら、`docs/RUNBOOK.md` の該当セクションと `sk
 
 ### 未解決の食い違い
 
-- **`gpu-dev` は sudo 経由かどうか。** docker-ssh の README の図は `sudo gpu-dev`、
-  本リポジトリの `build_summary()` の notes は「通常ユーザで実行する想定、sudo ではない」。
-  **どちらが現行か未確認。** 利用者への案内文が変わるので統合前に確定させること。
+- **`gpu-dev` の sudo 問題は決着済み**（2026-08-26）。`build_summary()` の notes が正しく、
+  通常ユーザで実行する。sudo だと `$USER` と `$HOME` が root のものになり、Pod の owner
+  ラベルと ServiceAccount の kubeconfig が両方外れる。docker-ssh 側で README の図を直し、
+  `warn_if_root()` を追加した。
 - 本リポジトリの `docs/RUNBOOK.md` §1 で利用者に伝える `gpu-dev` の使い方は
   docker-ssh の README から書いた。docker-ssh 側が更新されたら追随が要る
   （**現状この 2 つを同期させる仕組みは無い**）。
