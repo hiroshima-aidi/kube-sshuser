@@ -5,7 +5,19 @@ import json
 import sys
 from pathlib import Path
 
-from kube_sshuser.common import normalize_name, normalize_optional_text
+from kube_sshuser.common import (
+    KubectlError,
+    add_context_argument,
+    add_out_dir_argument,
+    cli_main,
+    confirm_or_exit,
+    current_context,
+    normalize_name,
+    normalize_optional_text,
+    report_out_dir,
+    resource_exists,
+    set_kube_context,
+)
 from kube_sshuser.provision_kubectl import (
     NODE_PORT_RANGE_END,
     NODE_PORT_RANGE_START,
@@ -29,17 +41,19 @@ from kube_sshuser.registry import (
 )
 
 
-def parse_args(argv=None):
-    parser = argparse.ArgumentParser(
-        description="Provision one namespace + PVC + quota + SA/RBAC + SSH deployment."
-    )
-    parser.add_argument("--user", required=True, help="logical username, e.g. taro")
+def build_option_parser():
+    """Every create option except the username.
+
+    Shared with cli.py via argparse `parents=` so `kube-sshuser create --help`
+    shows the real options and defaults instead of swallowing them into REMAINDER.
+    """
+    parser = argparse.ArgumentParser(add_help=False)
 
     key_group = parser.add_mutually_exclusive_group(required=True)
     key_group.add_argument("--public-key-file", help="path to user's SSH public key file")
     key_group.add_argument("--public-key-string", help="SSH public key string")
 
-    parser.add_argument("--image", required=True, help="SSH pod image")
+    parser.add_argument("--image", required=True, help="SSH pod image (required), e.g. ghcr.io/hiroshima-aidi/ssh-for-k8s:latest")
     parser.add_argument("--name", dest="display_name", help="human-readable name for this user")
     parser.add_argument("--desc", dest="description", help="free-text description for this user")
     parser.add_argument(
@@ -56,21 +70,37 @@ def parse_args(argv=None):
         help="NodePort to use for SSH Service (default: auto-select from 31000-31999)",
     )
 
-    parser.add_argument("--storage", default="100Gi", help="workspace PVC size")
-    parser.add_argument("--pvc-name", default="workspace", help="workspace PVC name")
-    parser.add_argument("--gpu-quota", type=int, default=1, help="GPU quota for the namespace")
-    parser.add_argument("--cpu-quota", default="16", help="CPU quota")
-    parser.add_argument("--memory-quota", default="64Gi", help="memory quota")
+    parser.add_argument("--storage", default="100Gi", help="workspace PVC size (default: 100Gi)")
+    parser.add_argument("--pvc-name", default="workspace", help="workspace PVC name (default: workspace)")
+    parser.add_argument("--gpu-quota", type=int, default=1, help="GPU quota for the namespace (default: 1; negative value omits the ResourceQuota entirely)")
+    parser.add_argument("--cpu-quota", default="16", help="CPU quota for the namespace, e.g. 16 (default: 16)")
+    parser.add_argument("--memory-quota", default="64Gi", help="memory quota for the namespace, e.g. 64Gi (default: 64Gi)")
 
-    parser.add_argument("--ssh-uid", type=int, default=2000, help="UID inside SSH container")
-    parser.add_argument("--ssh-gid", type=int, default=2000, help="GID inside SSH container")
-    parser.add_argument("--ssh-cpu-request", default="100m", help="ssh pod cpu request")
-    parser.add_argument("--ssh-cpu-limit", default="1", help="ssh pod cpu limit")
-    parser.add_argument("--ssh-memory-request", default="128Mi", help="ssh pod memory request")
-    parser.add_argument("--ssh-memory-limit", default="1Gi", help="ssh pod memory limit")
+    parser.add_argument("--ssh-uid", type=int, default=2000, help="UID inside SSH container (default: 2000)")
+    parser.add_argument("--ssh-gid", type=int, default=2000, help="GID inside SSH container (default: 2000)")
+    parser.add_argument("--ssh-cpu-request", default="100m", help="ssh pod cpu request (default: 100m)")
+    parser.add_argument("--ssh-cpu-limit", default="1", help="ssh pod cpu limit (default: 1)")
+    parser.add_argument("--ssh-memory-request", default="128Mi", help="ssh pod memory request (default: 128Mi)")
+    parser.add_argument("--ssh-memory-limit", default="1Gi", help="ssh pod memory limit (default: 1Gi)")
 
-    parser.add_argument("--namespace", default=None, help="override namespace")
-    parser.add_argument("--out-dir", default="./output", help="output directory")
+    parser.add_argument("--namespace", default=None, help="override namespace (default: ns-<user>)")
+    add_out_dir_argument(parser)
+    add_context_argument(parser)
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the manifest that would be applied and exit without touching the cluster",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="proceed even if the target namespace already exists in the cluster (overwrites it)",
+    )
+    parser.add_argument(
+        "--yes",
+        action="store_true",
+        help="do not ask for confirmation",
+    )
     parser.add_argument(
         "--login-node-label",
         default="role=login-server",
@@ -81,14 +111,23 @@ def parse_args(argv=None):
         "--node-address-type",
         default="ExternalIP",
         choices=["ExternalIP", "InternalIP"],
-        help="preferred node address type to report for SSH endpoint",
+        help="preferred node address type to report for SSH endpoint (default: ExternalIP)",
     )
 
+    return parser
+
+
+def parse_args(argv=None):
+    parser = argparse.ArgumentParser(
+        description="Provision one namespace + PVC + quota + SA/RBAC + SSH deployment.",
+        parents=[build_option_parser()],
+    )
+    parser.add_argument("--user", required=True, help="logical username, e.g. taro")
     return parser.parse_args(argv)
 
 
-
 def prepare_args(args):
+    set_kube_context(args.kube_context)
     args.display_name = normalize_optional_text(args.display_name)
     args.description = normalize_optional_text(args.description)
 
@@ -220,9 +259,44 @@ def build_summary(args, record_path, events_path, manifest_path, node_ip, node_n
 
 MAX_PORT_RETRIES = 5
 
+NODEPORT_CONFLICT_MARKERS = (
+    "provided port is already allocated",
+    "already allocated",
+    "in use",
+)
+
+
+def _is_nodeport_conflict(exc: KubectlError) -> bool:
+    """True when kubectl rejected the Service because the nodePort was taken.
+
+    Any other apply failure (bad image, RBAC, quota) must not be retried with a
+    different port - it would just fail five times with the same real error.
+    """
+    message = (exc.stderr or "").lower()
+    return any(marker in message for marker in NODEPORT_CONFLICT_MARKERS)
+
 
 def main(argv=None):
-    args = prepare_args(parse_args(argv))
+    run_with_args(parse_args(argv))
+
+
+def run_with_args(args):
+    args = prepare_args(args)
+
+    if args.dry_run:
+        # No cluster access, no registry writes: just show what would be applied.
+        public_key = resolve_public_key(args)
+        node_port = args.port if args.port is not None else NODE_PORT_RANGE_START
+        if args.port is None:
+            print(
+                f"# --dry-run: NodePort is auto-selected at apply time; "
+                f"showing {node_port} as a placeholder",
+                file=sys.stderr,
+            )
+        print(build_manifest(args, public_key, node_port), end="")
+        return
+
+    report_out_dir(args.out_dir)
 
     existing = load_user_record(args.out_dir, args.username)
     if existing and existing.get("status") == "active":
@@ -232,6 +306,32 @@ def main(argv=None):
             file=sys.stderr,
         )
         raise SystemExit(1)
+
+    # The local registry is not the source of truth: a different --out-dir, a lost
+    # registry, or another admin machine would otherwise silently overwrite a live
+    # user environment. Always confirm against the cluster as well.
+    if resource_exists("namespace", args.namespace):
+        if not args.force:
+            print(
+                f"error: namespace '{args.namespace}' already exists in cluster "
+                f"'{current_context()}' but is not recorded as active in this registry "
+                f"(out-dir: {args.out_dir}).\n"
+                "Applying now would overwrite the existing user's public key and quotas.\n"
+                "Use 'delete' first, point --out-dir at the correct registry, "
+                "or pass --force to overwrite deliberately.",
+                file=sys.stderr,
+            )
+            raise SystemExit(1)
+        print(
+            f"warning: namespace '{args.namespace}' already exists and will be overwritten (--force)",
+            file=sys.stderr,
+        )
+
+    print(f"[context] {current_context()}", file=sys.stderr)
+    confirm_or_exit(
+        f"Create user '{args.username}' (namespace {args.namespace}) in context '{current_context()}'?",
+        args.yes,
+    )
 
     public_key = resolve_public_key(args)
 
@@ -247,8 +347,15 @@ def main(argv=None):
         print("[1/3] applying namespace / pvc / quota / sa / rbac / deployment / service...", file=sys.stderr)
         kubectl_apply(manifest)
     else:
+        # find_free_nodeport() only sees ports already registered on Services, so two
+        # concurrent create runs can pick the same one. Retry on the apply failure and
+        # exclude every port we already tried.
+        tried = set()
         for attempt in range(MAX_PORT_RETRIES):
-            node_port = find_free_nodeport(NODE_PORT_RANGE_START, NODE_PORT_RANGE_END)
+            node_port = find_free_nodeport(
+                NODE_PORT_RANGE_START, NODE_PORT_RANGE_END, exclude=tried
+            )
+            tried.add(node_port)
             manifest = build_manifest(args, public_key, node_port)
             manifest_path.write_text(manifest, encoding="utf-8")
             print(
@@ -258,8 +365,8 @@ def main(argv=None):
             try:
                 kubectl_apply(manifest)
                 break
-            except SystemExit:
-                if attempt < MAX_PORT_RETRIES - 1:
+            except KubectlError as exc:
+                if attempt < MAX_PORT_RETRIES - 1 and _is_nodeport_conflict(exc):
                     print(f"nodePort {node_port} conflict, retrying...", file=sys.stderr)
                     continue
                 raise
@@ -330,4 +437,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    cli_main(main)

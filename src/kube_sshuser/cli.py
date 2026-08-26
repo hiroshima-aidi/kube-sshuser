@@ -4,7 +4,8 @@ import argparse
 import json
 import sys
 
-from kube_sshuser import delete_user, modify_user, provision_user, status, terminate_pod
+from kube_sshuser import delete_user, doctor, modify_user, provision_user, status, terminate_pod
+from kube_sshuser.common import add_context_argument, add_out_dir_argument, cli_main
 from kube_sshuser.registry import list_user_records, load_user_record
 
 
@@ -139,17 +140,15 @@ def parse_args(argv=None):
         "create",
         help="provision one user environment",
         description="Provision one namespace + PVC + quota + SA/RBAC + SSH deployment.",
+        parents=[provision_user.build_option_parser()],
         epilog=(
             "Example: kube-sshuser create taro --name 'Taro Yamada' --desc 'M1 student' "
-            "--public-key-file /path/to/key.pub --image ghcr.io/example/image:latest --port 2222"
+            "--public-key-file /path/to/key.pub --image ghcr.io/example/image:latest "
+            "--storage 100Gi --gpu-quota 1   "
+            "(NodePort is auto-selected from 31000-31999; --port must be in that range)"
         ),
     )
     create.add_argument("user", help="logical username, e.g. taro")
-    create.add_argument(
-        "args",
-        nargs=argparse.REMAINDER,
-        help="extra arguments passed to provision-user",
-    )
 
     modify = subparsers.add_parser(
         "modify",
@@ -164,19 +163,16 @@ def parse_args(argv=None):
     modify.add_argument("--memory-quota", default=None, help="new memory quota, e.g. 64Gi")
     modify.add_argument("--storage", default=None, help="new PVC size (expand only), e.g. 200Gi")
     modify.add_argument("--pvc-name", default=None, help="PVC name to resize (default: from registry)")
-    modify.add_argument("--out-dir", default="./output", help="base output directory")
+    add_out_dir_argument(modify)
+    add_context_argument(modify)
 
     delete = subparsers.add_parser(
         "delete",
         help="delete one provisioned user environment",
         description="Delete one provisioned SSH user environment.",
+        parents=[delete_user.build_option_parser()],
     )
     delete.add_argument("user", help="logical username, e.g. taro")
-    delete.add_argument(
-        "args",
-        nargs=argparse.REMAINDER,
-        help="extra arguments passed to delete-user",
-    )
 
     show = subparsers.add_parser(
         "show",
@@ -184,11 +180,7 @@ def parse_args(argv=None):
         description="Show one user registry record in a readable format.",
     )
     show.add_argument("user", help="logical username, e.g. taro")
-    show.add_argument(
-        "--out-dir",
-        default="./output",
-        help="base output directory used by create/delete",
-    )
+    add_out_dir_argument(show, " (used by create/delete)")
     show.add_argument(
         "--json",
         action="store_true",
@@ -200,11 +192,7 @@ def parse_args(argv=None):
         help="list user registry records",
         description="List user registry records grouped by status.",
     )
-    list_cmd.add_argument(
-        "--out-dir",
-        default="./output",
-        help="base output directory used by create/delete",
-    )
+    add_out_dir_argument(list_cmd, " (used by create/delete)")
     list_cmd.add_argument(
         "--status",
         choices=["active", "deleting", "deleted"],
@@ -226,15 +214,29 @@ def parse_args(argv=None):
         nargs="?",
         help="managed namespace name; if omitted, show namespace list",
     )
-    status_cmd.add_argument(
-        "--out-dir",
-        default="./output",
-        help="base output directory for registry (default: ./output)",
-    )
+    add_out_dir_argument(status_cmd)
+    add_context_argument(status_cmd)
     status_cmd.add_argument(
         "--json",
         action="store_true",
         help="print raw JSON instead of a formatted table",
+    )
+
+    doctor_cmd = subparsers.add_parser(
+        "doctor",
+        help="cross-check the local registry against the cluster",
+        description=(
+            "Report users whose registry record disagrees with the cluster: "
+            "missing namespaces, orphaned namespaces, untracked namespaces, and quota/PVC drift."
+        ),
+        parents=[],
+    )
+    add_out_dir_argument(doctor_cmd)
+    add_context_argument(doctor_cmd)
+    doctor_cmd.add_argument(
+        "--json",
+        action="store_true",
+        help="print raw JSON instead of a table",
     )
 
     terminate_cmd = subparsers.add_parser(
@@ -273,11 +275,17 @@ def parse_args(argv=None):
         action="store_true",
         help="print raw JSON result",
     )
+    add_context_argument(terminate_cmd)
 
     return parser.parse_args(argv)
 
 
 def main(argv=None):
+    """Console-script entry point; keeps kubectl failures from printing tracebacks."""
+    cli_main(_dispatch, argv)
+
+
+def _dispatch(argv=None):
     ns = parse_args(argv)
 
     if ns.command == "show":
@@ -288,8 +296,19 @@ def main(argv=None):
         list_users(ns)
         return
 
+    if ns.command == "doctor":
+        forwarded = ["--out-dir", ns.out_dir]
+        if ns.kube_context:
+            forwarded += ["--context", ns.kube_context]
+        if ns.json:
+            forwarded.append("--json")
+        doctor.main(forwarded)
+        return
+
     if ns.command == "status":
         forwarded = ["--out-dir", ns.out_dir]
+        if ns.kube_context:
+            forwarded += ["--context", ns.kube_context]
         if ns.namespace:
             forwarded.append(ns.namespace)
         if ns.json:
@@ -311,6 +330,8 @@ def main(argv=None):
             forwarded.append("--yes")
         if ns.json:
             forwarded.append("--json")
+        if ns.kube_context:
+            forwarded += ["--context", ns.kube_context]
         terminate_pod.main(forwarded)
         return
 
@@ -331,16 +352,19 @@ def main(argv=None):
         if ns.pvc_name is not None:
             forwarded += ["--pvc-name", ns.pvc_name]
         forwarded += ["--out-dir", ns.out_dir]
+        if ns.kube_context:
+            forwarded += ["--context", ns.kube_context]
         modify_user.main(forwarded)
         return
 
-    forwarded = ["--user", ns.user, *ns.args]
+    # create / delete share their option parsers with the module (parents=), so the
+    # parsed namespace can be handed over directly - no argv round-trip needed.
     if ns.command == "create":
-        provision_user.main(forwarded)
+        provision_user.run_with_args(ns)
         return
 
     if ns.command == "delete":
-        delete_user.main(forwarded)
+        delete_user.run_with_args(ns)
         return
 
     raise RuntimeError(f"unsupported command: {ns.command}")

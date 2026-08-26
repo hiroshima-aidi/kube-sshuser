@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import json
+import sys
 from pathlib import Path
 
 from kube_sshuser.common import kubectl_get_json, run
@@ -25,8 +26,14 @@ def get_used_nodeports() -> set:
     return used
 
 
-def find_free_nodeport(start: int = NODE_PORT_RANGE_START, end: int = NODE_PORT_RANGE_END) -> int:
+def find_free_nodeport(
+    start: int = NODE_PORT_RANGE_START,
+    end: int = NODE_PORT_RANGE_END,
+    exclude=None,
+) -> int:
     used = get_used_nodeports()
+    if exclude:
+        used = used | set(exclude)
     for port in range(start, end + 1):
         if port not in used:
             return port
@@ -34,7 +41,14 @@ def find_free_nodeport(start: int = NODE_PORT_RANGE_START, end: int = NODE_PORT_
 
 
 def kubectl_apply(yaml_text: str):
-    run(["kubectl", "apply", "-f", "-"], input_text=yaml_text, capture_output=False)
+    # Captured (not streamed) so callers can inspect stderr - the NodePort conflict
+    # retry in provision_user depends on it. Output is echoed to keep it visible.
+    result = run(["kubectl", "apply", "-f", "-"], input_text=yaml_text, capture_output=True)
+    if result.stdout:
+        print(result.stdout, end="")
+    if result.stderr:
+        print(result.stderr, end="", file=sys.stderr)
+    return result
 
 
 def kubectl_wait_deployment(namespace: str, name: str, timeout: str = "180s"):

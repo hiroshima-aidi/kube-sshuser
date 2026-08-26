@@ -5,7 +5,16 @@ import json
 import sys
 from typing import Optional
 
-from kube_sshuser.common import normalize_name, normalize_optional_text, run
+from kube_sshuser.common import (
+    add_context_argument,
+    add_out_dir_argument,
+    cli_main,
+    normalize_name,
+    normalize_optional_text,
+    report_out_dir,
+    run,
+    set_kube_context,
+)
 from kube_sshuser.registry import (
     append_event,
     build_operation_id,
@@ -34,7 +43,8 @@ def parse_args(argv=None):
         help="new PVC size (expand only), e.g. 200Gi",
     )
     parser.add_argument("--pvc-name", default=None, help="PVC name to resize (default: from registry)")
-    parser.add_argument("--out-dir", default="./output", help="output directory")
+    add_out_dir_argument(parser)
+    add_context_argument(parser)
     return parser.parse_args(argv)
 
 
@@ -76,6 +86,8 @@ def _patch_pvc(namespace: str, pvc_name: str, storage: str):
 
 def main(argv=None):
     args = parse_args(argv)
+    set_kube_context(args.kube_context)
+    report_out_dir(args.out_dir)
 
     username = normalize_name(args.user)
     record = load_user_record(args.out_dir, username)
@@ -205,4 +217,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    cli_main(main)

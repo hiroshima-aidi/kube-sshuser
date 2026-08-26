@@ -13,6 +13,10 @@ Kubernetes 上でユーザごとの SSH 環境を作成・変更・削除する�
 - `kube-sshuser show`: ユーザ単位のレジストリ情報表示
 - `kube-sshuser list`: レジストリ一覧表示（status フィルタ対応）
 - `kube-sshuser status`: 管理対象 namespace の一覧、または namespace 内 pod の稼働状況を表示
+- `kube-sshuser doctor`: レジストリとクラスタの食い違い（消えた namespace / 記録の無い namespace / クォータの drift）を検出
+
+ユースケース別の詳しい手順は [docs/RUNBOOK.md](docs/RUNBOOK.md) を参照してください。
+Claude Code から操作するための Skill も同梱しています（[導入手順](docs/RUNBOOK.md#9-claude-code-から使う)）。
 
 ## 前提条件
 
@@ -103,7 +107,15 @@ kube-sshuser modify taro --name "Taro Yamada" --gpu-quota 4 --storage 200Gi
 
 ### ユーザ削除
 
+削除は namespace ごと消すため、**PVC に置かれたデータも失われます**。確認プロンプトでは
+namespace 名の入力を求めます（`--yes` で省略可）。
+
 ```bash
+kube-sshuser delete taro
+# => 削除対象（context / namespace / PVC / pod 数）が表示され、
+#    Type 'ns-taro' to confirm: の入力を求められる
+
+# 非対話（スクリプトから）
 kube-sshuser delete taro --yes
 ```
 
@@ -183,8 +195,14 @@ kube-sshuser status --json
 - `--ssh-memory-request`, `--ssh-memory-limit`
 - `--namespace`
 - `--out-dir` (default: `./output`)
+- `--dry-run` (適用せず生成マニフェストだけを出力)
 - `--login-node-label` (default: `role=login-server`) — ログインノードを選択するラベル
 - `--node-address-type` (`ExternalIP` / `InternalIP`, default: `ExternalIP`)
+- `--context` (kube-context の明示指定)
+- `--yes` (確認プロンプトを省略)
+- `--force` (対象 namespace が既にクラスタに存在しても続行＝上書き)
+
+`--out-dir` の既定値は `$KUBE_SSHUSER_OUT_DIR`、未設定時は `./output` です（全サブコマンド共通）。
 
 `kube-sshuser modify <user> ...` の主なオプション:
 
@@ -195,20 +213,32 @@ kube-sshuser status --json
 - `--memory-quota` (メモリクォータ)
 - `--storage` (PVC 拡張サイズ、縮小不可)
 - `--pvc-name` (変更対象 PVC 名、省略時はレジストリから取得)
-- `--out-dir` (default: `./output`)
+- `--out-dir`
+- `--context`
 
 `kube-sshuser delete <user> ...` の主なオプション:
 
-- `--namespace`
+- `--namespace` (省略時はレジストリの記録値。記録が無い場合のみ `ns-<user>` を推測し、警告を出します)
 - `--out-dir`
+- `--context`
 - `--keep-namespace`
 - `--keep-files`
-- `--yes`
+- `--yes` (namespace 名の入力確認を省略)
 
 `kube-sshuser status` の主なオプション:
 
 - `[namespace]` (省略時は namespace 一覧、指定時はその namespace の pod 一覧)
 - `--json`
+- `--out-dir`
+- `--context`
+
+`kube-sshuser doctor` の主なオプション:
+
+- `--out-dir`
+- `--context`
+- `--json`
+
+食い違いが1件でもあると終了コード 1 を返します。
 
 `kube-sshuser terminate <namespace> <pod> ...` の主なオプション:
 
@@ -217,16 +247,56 @@ kube-sshuser status --json
 - `--grace-period <seconds>`
 - `--yes`
 - `--json`
+- `--context`
 
 ## 出力とレジストリ
 
-既定では `--out-dir ./output` 配下に以下を出力します。
+`--out-dir` 配下に以下を出力します。
 
-- `./output/<user>/provision-<user>.yaml`: 生成マニフェスト
-- `./output/_registry/users/<user>.json`: ユーザの最新状態
-- `./output/_registry/events.ndjson`: 監査イベントログ（create / modify / delete を記録）
+- `<out-dir>/<user>/provision-<user>.yaml`: 生成マニフェスト
+- `<out-dir>/_registry/users/<user>.json`: ユーザの最新状態
+- `<out-dir>/_registry/events.ndjson`: 監査イベントログ（create / modify / delete を記録）
 
 公開鍵の平文はレジストリに保存せず、`fingerprint_sha256` を記録します。
+
+### out-dir は必ず固定してください
+
+`--out-dir` の既定値は環境変数 `KUBE_SSHUSER_OUT_DIR`、未設定なら `./output` です。
+**相対パスのまま運用すると、実行したディレクトリによってレジストリを見失います。**
+複数の管理者・複数の踏み台から操作する場合は、共有パスを環境変数で固定してください。
+
+```bash
+export KUBE_SSHUSER_OUT_DIR=/srv/kube-sshuser
+```
+
+各コマンドは実行時に、実際に使ったレジストリのパスを stderr に出力します。
+
+```
+[registry] /srv/kube-sshuser ($KUBE_SSHUSER_OUT_DIR)
+```
+
+レジストリを見失った状態で `create` しても、既存 namespace がクラスタ側に居れば
+中断します（意図的に上書きする場合のみ `--force`）。
+
+### クラスタの取り違え防止
+
+`create` / `delete` / `terminate` は対象の kube-context を表示してから確認を求めます。
+`--context` で明示的に切り替えることもできます。
+
+```bash
+kube-sshuser --help                      # サブコマンド一覧
+kube-sshuser create taro --context lab-cluster ...
+```
+
+## 既知の制約
+
+- **workspace PVC は作成されますが、まだ SSH Pod にマウントされていません。**
+  RWO の multi-attach を避けるため、RWX/NFS の導入まで保留しています。
+  `--storage` で確保した容量は、現時点では学生からは使えません。
+- ResourceQuota が `limits.cpu` / `limits.memory` を hard 指定しているため、
+  ユーザが namespace 内に作る Pod は requests / limits を明示する必要があります。
+- SSH Pod 自身も quota を消費します（既定で cpu limit `1` / memory limit `1Gi`）。
+- 公開鍵の変更手段はまだありません（`delete` → `create` はデータ消失を伴います）。
 
 ## セキュリティメモ
 

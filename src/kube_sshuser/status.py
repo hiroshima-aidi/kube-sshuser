@@ -4,7 +4,16 @@ import argparse
 import json
 import sys
 
-from kube_sshuser.common import humanize_age, parse_k8s_timestamp, run
+from kube_sshuser.common import (
+    add_context_argument,
+    add_out_dir_argument,
+    cli_main,
+    default_out_dir,
+    humanize_age,
+    parse_k8s_timestamp,
+    run,
+    set_kube_context,
+)
 from kube_sshuser.registry import list_user_records
 
 
@@ -191,7 +200,8 @@ def format_namespace_quota(hard, request_key, limit_key=None, default="-"):
     return default
 
 
-def collect_status_groups(out_dir="./output"):
+def collect_status_groups(out_dir=None):
+    out_dir = out_dir or default_out_dir()
     # Load port information from registry
     port_by_namespace = {}
     try:
@@ -455,16 +465,14 @@ def parse_args(argv=None):
         action="store_true",
         help="print raw JSON instead of a formatted table",
     )
-    parser.add_argument(
-        "--out-dir",
-        default="./output",
-        help="base output directory for registry (default: ./output)",
-    )
+    add_out_dir_argument(parser)
+    add_context_argument(parser)
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
+    set_kube_context(args.kube_context)
     groups = collect_status_groups(args.out_dir)
 
     if args.namespace:
@@ -494,4 +502,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    cli_main(main)

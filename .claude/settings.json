@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(kube-sshuser status:*)",
+      "Bash(kube-sshuser list:*)",
+      "Bash(kube-sshuser show:*)",
+      "Bash(kube-sshuser doctor:*)",
+      "Bash(kubectl get:*)",
+      "Bash(kubectl describe:*)",
+      "Bash(kubectl logs:*)",
+      "Bash(kubectl top:*)",
+      "Bash(kubectl config current-context)",
+      "Bash(kubectl config get-contexts:*)"
+    ]
+  }
+}

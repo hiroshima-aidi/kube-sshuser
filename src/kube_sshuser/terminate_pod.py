@@ -4,7 +4,13 @@ import argparse
 import json
 import sys
 
-from kube_sshuser.common import run
+from kube_sshuser.common import (
+    add_context_argument,
+    cli_main,
+    current_context,
+    run,
+    set_kube_context,
+)
 
 
 MANAGED_NAMESPACE_LABEL_KEY = "app.kubernetes.io/managed-by"
@@ -113,11 +119,13 @@ def parse_args(argv=None):
         action="store_true",
         help="print JSON result",
     )
+    add_context_argument(parser)
     return parser.parse_args(argv)
 
 
 def main(argv=None):
     args = parse_args(argv)
+    set_kube_context(args.kube_context)
 
     if args.all == (args.pod is not None):
         print("specify exactly one of --all or a pod name", file=sys.stderr)
@@ -142,6 +150,7 @@ def main(argv=None):
         raise SystemExit(1)
 
     summary = {
+        "context": current_context(),
         "namespace": args.namespace,
         "target_count": len(targets),
         "force": args.force,
@@ -159,7 +168,9 @@ def main(argv=None):
     }
 
     print(json.dumps(summary, ensure_ascii=False, indent=2))
-    confirm_or_exit("Proceed with pod deletion?", args.yes)
+    confirm_or_exit(
+        f"Proceed with pod deletion in context '{current_context()}'?", args.yes
+    )
 
     results = []
     for pod in targets:
@@ -174,4 +185,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    cli_main(main)

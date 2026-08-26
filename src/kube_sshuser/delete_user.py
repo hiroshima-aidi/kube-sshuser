@@ -6,8 +6,26 @@ import shutil
 import sys
 from pathlib import Path
 
-from kube_sshuser.common import normalize_name, run
-from kube_sshuser.registry import append_event, build_operation_id, update_user_record, utcnow_iso
+from kube_sshuser.common import (
+    add_context_argument,
+    add_out_dir_argument,
+    cli_main,
+    confirm_or_exit,
+    confirm_typed_or_exit,
+    current_context,
+    kubectl_get_json,
+    normalize_name,
+    report_out_dir,
+    run,
+    set_kube_context,
+)
+from kube_sshuser.registry import (
+    append_event,
+    build_operation_id,
+    load_user_record,
+    update_user_record,
+    utcnow_iso,
+)
 
 
 def namespace_exists(namespace: str) -> bool:
@@ -35,22 +53,35 @@ def delete_output_dir(path: Path) -> bool:
     return True
 
 
-def confirm_or_exit(message: str, assume_yes: bool):
-    if assume_yes:
-        return
-    reply = input(f"{message} [y/N]: ").strip().lower()
-    if reply not in {"y", "yes"}:
-        print("aborted", file=sys.stderr)
-        sys.exit(1)
+def describe_namespace_contents(namespace: str):
+    """Best-effort inventory of what deleting the namespace destroys."""
+    pvcs = kubectl_get_json(["kubectl", "-n", namespace, "get", "pvc", "-o", "json"]) or {}
+    pods = kubectl_get_json(["kubectl", "-n", namespace, "get", "pods", "-o", "json"]) or {}
+    return {
+        "pvcs": [
+            {
+                "name": item.get("metadata", {}).get("name"),
+                "storage": item.get("spec", {})
+                .get("resources", {})
+                .get("requests", {})
+                .get("storage"),
+            }
+            for item in pvcs.get("items", [])
+        ],
+        "pod_count": len(pods.get("items", [])),
+    }
 
 
-def parse_args(argv=None):
-    p = argparse.ArgumentParser(
-        description="Delete one provisioned SSH user environment."
+def build_option_parser():
+    """Every delete option except the username (shared with cli.py via parents=)."""
+    p = argparse.ArgumentParser(add_help=False)
+    p.add_argument(
+        "--namespace",
+        default=None,
+        help="override namespace (default: from registry, else ns-<user>)",
     )
-    p.add_argument("--user", required=True, help="logical username, e.g. taro")
-    p.add_argument("--namespace", default=None, help="override namespace")
-    p.add_argument("--out-dir", default="./output", help="base output directory")
+    add_out_dir_argument(p)
+    add_context_argument(p)
 
     p.add_argument(
         "--keep-namespace",
@@ -67,29 +98,82 @@ def parse_args(argv=None):
         action="store_true",
         help="do not ask for confirmation",
     )
+    return p
+
+
+def parse_args(argv=None):
+    p = argparse.ArgumentParser(
+        description="Delete one provisioned SSH user environment.",
+        parents=[build_option_parser()],
+    )
+    p.add_argument("--user", required=True, help="logical username, e.g. taro")
     return p.parse_args(argv)
 
 
+def resolve_namespace(args, username: str):
+    """Namespace to delete, preferring what create actually recorded.
+
+    Guessing ns-<user> is wrong whenever the environment was created with an
+    explicit --namespace, and would target an unrelated namespace.
+    """
+    if args.namespace:
+        return args.namespace, "--namespace"
+
+    record = load_user_record(args.out_dir, username)
+    recorded = (record or {}).get("namespace", {}).get("name")
+    if recorded:
+        return recorded, "registry"
+
+    guessed = normalize_name(f"ns-{username}")
+    print(
+        f"warning: no registry record for '{username}' in {args.out_dir}; "
+        f"falling back to guessed namespace '{guessed}'",
+        file=sys.stderr,
+    )
+    return guessed, "guessed"
+
+
 def main(argv=None):
-    args = parse_args(argv)
+    run_with_args(parse_args(argv))
+
+
+def run_with_args(args):
+    set_kube_context(args.kube_context)
+    report_out_dir(args.out_dir)
 
     username = normalize_name(args.user)
-    namespace = args.namespace or normalize_name(f"ns-{username}")
+    namespace, namespace_source = resolve_namespace(args, username)
     output_dir = (Path(args.out_dir) / username).resolve()
+
+    exists = namespace_exists(namespace) if not args.keep_namespace else None
 
     summary = {
         "user": username,
+        "context": current_context(),
         "namespace": namespace,
+        "namespace_source": namespace_source,
         "output_dir": str(output_dir),
         "delete_namespace": not args.keep_namespace,
         "delete_files": not args.keep_files,
-        "namespace_exists": namespace_exists(namespace) if not args.keep_namespace else None,
+        "namespace_exists": exists,
         "output_dir_exists": output_dir.exists() if not args.keep_files else None,
     }
+    if exists:
+        summary["will_destroy"] = describe_namespace_contents(namespace)
 
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
-    confirm_or_exit("Proceed with deletion?", args.yes)
+    if args.keep_namespace:
+        print("(--keep-namespace: cluster resources are left untouched)", file=sys.stderr)
+        confirm_or_exit("Proceed with deletion?", args.yes)
+    else:
+        confirm_typed_or_exit(
+            namespace,
+            f"This deletes namespace '{namespace}' in context '{current_context()}' "
+            "including its PersistentVolumeClaims. Stored data will be lost and cannot "
+            "be recovered.",
+            args.yes,
+        )
     operation_id = build_operation_id("delete")
     started_at = utcnow_iso()
 
@@ -180,4 +264,4 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    cli_main(main)
