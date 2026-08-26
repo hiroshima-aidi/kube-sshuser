@@ -7,6 +7,21 @@ description: 研究室 Kubernetes クラスタの学生 SSH 環境を kube-sshus
 
 研究室クラスタの学生 SSH 環境を管理する CLI `kube-sshuser` を操作するためのスキル。
 
+## 担当範囲（重要）
+
+このスキルが扱うのは **管理者側の作業** だけ。本ツールが作るのは「入れ物」
+（namespace / PVC / クォータ / SSH の入口）までで、その中で何をするかは利用者側の領分。
+
+| 質問・依頼 | 担当 | 対応 |
+|---|---|---|
+| 環境を払い出す・消す・クォータを変える | kube-sshuser（このスキル） | 対応する |
+| 稼働状況・GPU の使用状況を見る | kube-sshuser（このスキル） | 対応する |
+| GPU Pod の起動・停止（`gpu-dev up` / `down`） | docker-ssh リポジトリ | **本ツールの対象外**。`gpu-dev` の使い方として案内する |
+| JupyterLab / JupyterHub のデプロイ | kube-jupyterhub リポジトリ | **本ツールの対象外**。別ツールであることを伝える |
+| コンテナイメージのビルド | docker-ssh / jupyter-gpu | **本ツールの対象外** |
+
+対象外の依頼を kube-sshuser で無理に実現しようとしないこと。どのツールの担当かを伝える。
+
 **詳細な手順書は `references/runbook.md`**（リポジトリの `docs/RUNBOOK.md` への symlink）。
 このファイルには判断と安全ルールだけを書く。個別の手順が必要になったら
 `references/runbook.md` の該当セクションを読むこと。
@@ -112,8 +127,9 @@ Claude が実行する場合、CLI の入力確認を `--yes` で飛ばすこと
 
 ## 既知の制約（学生に説明が必要になる）
 
-- **`--storage` で確保した PVC はまだ SSH Pod にマウントされていない。** NFS 導入まで保留中。
-  ホームディレクトリは Pod の再作成で消える
+- **workspace PVC は SSH Pod にはマウントされない（意図的）。** 利用者が `gpu-dev up` で
+  起動する GPU Pod に `/workspace` としてマウントされる。SSH コンテナ内のホームは
+  Pod 再作成で消えるので、永続データは `/workspace` に置くよう伝える
 - ResourceQuota が limits を hard 指定しているため、学生の Pod は requests / limits の
   明示が必要（`must specify limits.cpu` の原因）。RUNBOOK §7.3
 - SSH Pod 自身もクォータを消費する（既定で cpu 1 / memory 1Gi）

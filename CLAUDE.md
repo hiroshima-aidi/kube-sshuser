@@ -4,7 +4,15 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-`kube-sshuser` は、Kubernetes 上にユーザごとの SSH 環境（namespace / PVC / ResourceQuota / SA+RBAC / Deployment / NodePort Service）を作成・変更・削除する管理者向け CLI。README.md は日本語で書かれており、ユーザ向けドキュメントの実体はそちら。
+`kube-sshuser` は、Kubernetes 上にユーザごとの SSH 環境（namespace / PVC / ResourceQuota / SA+RBAC / Deployment / NodePort Service）を作成・変更・削除する **管理者向け** CLI。README.md は日本語で書かれており、ユーザ向けドキュメントの実体はそちら。
+
+**このツールの担当範囲は「入れ物」まで。** 隣接リポジトリとの境界を取り違えないこと:
+
+- `docker-ssh` — SSH コンテナイメージと `gpu-dev`（利用者が GPU Pod を起動・停止するツール）。本リポジトリが `--image` に指定するのがこのイメージ
+- `kube-jupyterhub` — JupyterHub 管理 CLI。**JupyterLab/JupyterHub は本リポジトリの対象外**
+- `jupyter-gpu` — Jupyter イメージのビルド
+
+**PVC は SSH Pod にマウントされない。これは意図的な設計。** RWO の multi-attach を避けるため SSH コンテナは入口に徹し、PVC は利用者が `gpu-dev up` で起動する GPU Pod に `/workspace` としてマウントされる（`gpu_dev_pod.py` が `claimName` を指定する）。manifest の Role が pods の create/delete/exec/portforward を許しているのは、SSH コンテナ内から ServiceAccount で `gpu-dev` を動かすため。「PVC が未使用」と誤読しないこと。
 
 ## Commands
 
@@ -74,3 +82,93 @@ python -c "from kube_sshuser.provision_manifest import build_manifest; ..."
 - `.claude/settings.json` — 参照系コマンドのみ事前許可。変更系は必ずプロンプトさせる
 
 CLI の挙動を変えたら、`docs/RUNBOOK.md` の該当セクションと `skills/kube/SKILL.md` の安全ルールも合わせて見直すこと。
+
+---
+
+## 現状の記録（2026-08-26 時点／統合リファクタリング前）
+
+研究室の Kubernetes まわりのツールが 4 リポジトリに分かれており、**これらをまとめて
+リファクタリングする方針**が出ている。着手する際の前提としてここに記録を残す。
+
+### リポジトリ構成
+
+| リポジトリ | remote | パッケージ / エントリポイント | 最終更新 |
+|---|---|---|---|
+| admin-tool（本リポジトリ） | `hiroshima-aidi/kube-sshuser` | `kube_sshuser` / `kube-sshuser` | 2026-08-26 |
+| docker-ssh | `hiroshima-aidi/ssh-for-k8s` | SSH イメージ + `ssh_tool`（`gpu-dev`） | 2026-04-16 |
+| kube-jupyterhub | `hiroshima-aidi/kube-jupyterhub` | `kube_jupyterhub` / `kube-jupyterhub` v0.2.0 | 2026-04-20 |
+| jupyter-gpu | `rellab/jupyter-gpu` | Makefile ベースのイメージビルド | 2026-04-20 |
+
+ローカルでは `~/Documents/` 直下に並んでいる。**ディレクトリ名とリポジトリ名が一致していない**
+点に注意（`admin-tool` → `kube-sshuser`、`docker-ssh` → `ssh-for-k8s`）。
+
+### 責任分界（現状）
+
+```
+[管理者] kube-sshuser create taro ...
+             ↓ 作るのは「入れ物」まで
+         namespace ns-taro / PVC workspace / ResourceQuota / SA+RBAC / SSH Pod (NodePort)
+             ↓
+[利用者] ssh -p 31007 taro@<host>          ← SSH イメージは docker-ssh 製
+             ↓ SSH コンテナ内で
+         gpu-dev up --gpu 1                 ← PVC を /workspace にマウントした GPU Pod
+         gpu-dev status / down
+
+[別系統] kube-jupyterhub apply / refresh / list / pvc   ← Helm で JupyterHub を管理
+         jupyter-gpu                                     ← Jupyter イメージのビルド
+```
+
+- **kube-sshuser と kube-jupyterhub は別系統。** 同じクラスタを使うのかどうか、
+  ユーザ・PVC・クォータを共有するのかは **未確認**。統合を検討する際の最初の確認事項。
+- `gpu-dev` は SSH コンテナ内から ServiceAccount で kubectl 相当の操作をする。
+  そのための RBAC を発行しているのが本リポジトリの `provision_manifest.py`。
+  **両者は Role の権限セットで密結合している**（pods の create/delete/exec/portforward、
+  pvc の get/list）。片方だけ変えると壊れる。
+
+### 統合を検討する際の論点
+
+1. **ユーザの概念が二重化している。** kube-sshuser は namespace 単位のユーザを台帳で管理し、
+   kube-jupyterhub は JupyterHub 側のユーザを持つ。同一人物を両方で払い出す運用なら、
+   台帳の一本化が最大の争点になる。
+2. **PVC の共有。** kube-sshuser の `workspace` PVC（RWO）と JupyterHub の PVC が別物なら、
+   利用者から見て「データが 2 か所にある」状態になる。NFS（購入済み・未対応）を入れる際に
+   まとめて設計し直すのが自然。
+3. **CLI を統合するか、並置のままにするか。** `kube-sshuser` / `kube-jupyterhub` は
+   どちらも kubectl サブプロセス方式で、レジストリの有無だけが違う。共通化するなら
+   `common.py`（`run` / `KubectlError` / context / out-dir）が土台になる。
+4. **ラベルのドメインが `provision-user.openai.local`。** 研究室のツールとして不適切だが、
+   既存クラスタ上のリソースが古いラベルを持つため一括置換は破壊的。統合のタイミングが
+   変え時だが、新旧両対応の移行期間が要る。
+
+### 未解決の食い違い
+
+- **`gpu-dev` は sudo 経由かどうか。** docker-ssh の README の図は `sudo gpu-dev`、
+  本リポジトリの `build_summary()` の notes は「通常ユーザで実行する想定、sudo ではない」。
+  **どちらが現行か未確認。** 利用者への案内文が変わるので統合前に確定させること。
+- 本リポジトリの `docs/RUNBOOK.md` §1 で利用者に伝える `gpu-dev` の使い方は
+  docker-ssh の README から書いた。docker-ssh 側が更新されたら追随が要る
+  （**現状この 2 つを同期させる仕組みは無い**）。
+
+### 本リポジトリで積み残している改善（レビュー済み・未着手）
+
+`kube-sshuser` 単体のコードレビューで挙がったもののうち、まだ入れていないもの。
+統合リファクタリングで一緒に片付ける候補。
+
+- **LimitRange が無い。** ResourceQuota が `limits.cpu` / `limits.memory` を hard 指定して
+  いるため、利用者の Pod は requests/limits の明示が必須になり `must specify limits.cpu` で
+  弾かれる。namespace に LimitRange を同梱すれば解消する（**利用者体験への影響が最も大きい**）
+- **公開鍵の更新手段が無い。** 現状は `kubectl set env deploy/ssh-<user> SSH_PUBLIC_KEY=...`
+  という回避策のみで、台帳の fingerprint が更新されない。公開鍵を Secret に移せば
+  無停止更新の道が開けるが、docker-ssh のイメージ側の対応が要る
+- `modify` のクォータ縮小に事前チェックが無い（使用中より小さい値にできてしまう）
+- `--gpu-quota` に負値を渡すと ResourceQuota ごと作られない隠れ仕様（`provision_manifest.py`）
+- `list` と `status` の出力形式が不統一（前者は key=value 羅列、後者はテーブル）
+
+### 直近の変更（v0.5.0、未リリース）
+
+ブランチ `harden-and-skill` に以下が入っている。**main には未マージ。**
+
+- 事故要因の修正: NodePort リトライの不発、delete の namespace 推測、create の重複チェック、
+  out-dir の cwd 依存、create/delete の help 欠落、context 未表示、delete の確認強化
+- 追加: `create --dry-run`、`kube-sshuser doctor`、`docs/RUNBOOK.md`、`skills/kube/`（Claude Code 用 Skill）
+- 実クラスタでの検証は未実施（`kubectl apply --dry-run=client` と Skill の実挙動が残っている）

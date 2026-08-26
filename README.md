@@ -4,6 +4,20 @@ Kubernetes 上でユーザごとの SSH 環境を作成・変更・削除する�
 
 このリポジトリには kube-sshuser 本体のみを含みます。
 
+## 関連リポジトリと担当範囲
+
+| リポジトリ | 役割 | 使う人 |
+|---|---|---|
+| **kube-sshuser**（本リポジトリ） | 学生ごとの namespace / PVC / クォータ / SSH 環境の払い出しと管理 | 管理者 |
+| [docker-ssh](https://github.com/hiroshima-aidi/docker-ssh) | SSH コンテナイメージと `gpu-dev`（GPU Pod の起動・停止） | 利用者（学生） |
+| kube-jupyterhub | JupyterHub の管理 | 管理者（別系統） |
+| jupyter-gpu | Jupyter コンテナイメージのビルド | 管理者（別系統） |
+
+**JupyterLab / JupyterHub のデプロイは本リポジトリの対象外**で、kube-jupyterhub が担当します。
+
+本ツールが作るのは「入れ物」（namespace・PVC・クォータ・SSH の入口）までです。
+その中で GPU Pod を起動するのは利用者側の `gpu-dev` で、こちらは docker-ssh のドキュメントを参照してください。
+
 ## できること
 
 - `kube-sshuser create`: namespace / PVC / ResourceQuota / SA / RBAC / SSH Deployment / NodePort Service を作成
@@ -290,9 +304,11 @@ kube-sshuser create taro --context lab-cluster ...
 
 ## 既知の制約
 
-- **workspace PVC は作成されますが、まだ SSH Pod にマウントされていません。**
-  RWO の multi-attach を避けるため、RWX/NFS の導入まで保留しています。
-  `--storage` で確保した容量は、現時点では学生からは使えません。
+- **workspace PVC は SSH Pod にはマウントされません。** RWO の multi-attach を避けるため
+  意図的にそうしています。PVC は利用者が `gpu-dev up` で起動する GPU Pod に
+  `/workspace` としてマウントされます（`gpu-dev --pvc` / `--mount-path`）。
+  したがって SSH コンテナ内のホームディレクトリは Pod 再作成で失われます。
+  永続させたいデータは `/workspace` に置くよう利用者に周知してください。
 - ResourceQuota が `limits.cpu` / `limits.memory` を hard 指定しているため、
   ユーザが namespace 内に作る Pod は requests / limits を明示する必要があります。
 - SSH Pod 自身も quota を消費します（既定で cpu limit `1` / memory limit `1Gi`）。
