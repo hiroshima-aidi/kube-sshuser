@@ -72,7 +72,7 @@ The default pushed tag format is:
 Example:
 
 ```text
-ghcr.io/rellab/jupyter-gpu:cuda12.2-ijulia-2026.04
+ghcr.io/rellab/jupyter-gpu:cuda12.2-ijulia-2026.04.01
 ```
 
 ## Notes

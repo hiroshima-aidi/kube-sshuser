@@ -17,7 +17,7 @@ make build STACK=cuda12.2 WITH_IJULIA=1
 make buildx STACK=cuda12.2
 
 # Push single image to ghcr.io
-make push STACK=cuda12.2 IMAGE_TAG=2026.04
+make push STACK=cuda12.2 IMAGE_TAG=2026.04.01
 
 # Push all standard images (cpu, cuda12.2, cuda11.8 with IJulia)
 make push-all
@@ -26,7 +26,7 @@ make push-all
 make build-flavor STACK=cuda12.2 FLAVOR=cv
 
 # Push flavor images
-make push-flavor STACK=cpu FLAVOR=dl IMAGE_TAG=2026.04
+make push-flavor STACK=cpu FLAVOR=dl IMAGE_TAG=2026.04.01
 make push-flavor-all
 
 # Run locally
@@ -66,7 +66,7 @@ Standard images are standalone; flavor images use `ARG BASE_IMAGE` and must be b
 
 ```
 ghcr.io/<IMAGE_ORGANIZATION>/<IMAGE_NAME>:<STACK>[-ijulia]-<IMAGE_TAG>
-# e.g. ghcr.io/rellab/jupyter-gpu:cuda12.2-ijulia-2026.04
+# e.g. ghcr.io/rellab/jupyter-gpu:cuda12.2-ijulia-2026.04.01
 ```
 
 ## Smoke test

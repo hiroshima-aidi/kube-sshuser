@@ -17,7 +17,7 @@ endif
 # ---------------------------------------------------------
 DOCKER ?= docker
 IMAGE_NAME ?= jupyter-gpu
-IMAGE_TAG ?= 2026.04
+IMAGE_TAG ?= 2026.04.01
 IMAGE_ORGANIZATION ?= rellab
 DOCKER_REGISTRY ?= ghcr.io
 DOCKER_USERNAME ?= $(GITHUB_USER)
@@ -77,7 +77,7 @@ help:
 	@echo "  IMAGE_ORGANIZATION Organization name (default: rellab)"
 	@echo "  DOCKER_REGISTRY    Docker registry (default: ghcr.io)"
 	@echo "  IMAGE_NAME         Image name (default: jupyter-gpu)"
-	@echo "  IMAGE_TAG          Image tag suffix (default: 2026.04)"
+	@echo "  IMAGE_TAG          Image tag suffix (default: 2026.04.01)"
 	@echo "  STACK              Stack type (default: cuda12.2, options: cpu | cuda12.2 | cuda11.8)"
 	@echo "  WITH_IJULIA        Install IJulia kernel (default: 1, options: 0 | 1)"
 	@echo "  FLAVOR             Flavor type (default: cv, options: cv | dl)"
@@ -86,10 +86,10 @@ help:
 	@echo "Examples:"
 	@echo "  make build STACK=cpu WITH_IJULIA=1"
 	@echo "  make buildx STACK=cuda11.8"
-	@echo "  make push STACK=cuda12.2 IMAGE_TAG=2026.04"
+	@echo "  make push STACK=cuda12.2 IMAGE_TAG=2026.04.01"
 	@echo "  make push-all"
 	@echo "  make build-flavor STACK=cuda12.2 FLAVOR=cv"
-	@echo "  make push-flavor STACK=cpu FLAVOR=dl IMAGE_TAG=2026.04"
+	@echo "  make push-flavor STACK=cpu FLAVOR=dl IMAGE_TAG=2026.04.01"
 
 # ---------------------------------------------------------
 # Build and Push
