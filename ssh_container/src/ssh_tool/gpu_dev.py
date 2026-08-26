@@ -4,6 +4,7 @@ import argparse
 import importlib
 import os
 import re
+import sys
 import time
 from pathlib import Path
 
@@ -290,7 +291,24 @@ def apply_up_file_config(args):
         setattr(args, target, value)
 
 
+def warn_if_root():
+    if os.geteuid() != 0:
+        return
+    print(
+        "[gpu-dev] warning: running as root. gpu-dev is meant to run as the "
+        "normal SSH user, not via sudo.",
+        file=sys.stderr,
+    )
+    print(
+        "[gpu-dev] warning: under sudo, $USER and $HOME belong to root, so the "
+        "pod owner label and the ServiceAccount kubeconfig are both wrong.",
+        file=sys.stderr,
+    )
+
+
 def main():
+    warn_if_root()
+
     parser = build_parser()
     args = parser.parse_args()
 

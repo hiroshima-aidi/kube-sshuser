@@ -108,8 +108,14 @@ env の値だけはエスケープ処理があるが、他のフィールドは�
 
 ## 未解決の食い違い
 
-- README の図は `sudo gpu-dev` だが、kube-sshuser 側の案内文は「通常ユーザで実行、sudo ではない」。
-  **コードは通常ユーザ前提**（owner を `$USER` から取り、`$HOME/.kube/config` に依存する）。
-  ドキュメントを直す前に運用の実際を確認すること。
 - `Makefile` の `ADMIN_DIR`（`admin_tool/`）と `venv` / `admin-install` ターゲットは、
   **もう存在しないディレクトリ**を指している（管理ツールは kube-sshuser へ分離済み）。
+- `gpu_dev.py:main()` の `env.pop("KUBECONFIG")` は、`entrypoint.sh` が `KUBECONFIG` を
+  kubectl の既定パスと同じ `$HOME/.kube/config` に設定しているため**実質何もしていない**。
+  sudo 運用の名残と思われる。
+
+## 決着済み
+
+- **`gpu-dev` は sudo ではなく通常ユーザで実行する。** owner を `$USER` から取り、
+  kubeconfig が SSH ユーザの `$HOME` にあるため、sudo だと両方外れる。README の図から
+  sudo を削り、`warn_if_root()` で root 実行時に警告を出すようにした。

@@ -9,8 +9,12 @@ SSH コンテナイメージと`gpu-dev`ツール。
 
 ## 全体構成
 
-\[User\] → SSH → \[SSH Container\] → sudo gpu-dev →
+\[User\] → SSH → \[SSH Container\] → gpu-dev →
 Kubernetes(namespaceごと)
+
+`gpu-dev` は **SSH でログインした通常ユーザのまま** 実行します（sudo は不要です）。
+sudo を付けると `$USER` と `$HOME` が root のものになり、Pod の owner ラベルと
+ServiceAccount の kubeconfig の両方が外れて動きません。
 
 ------------------------------------------------------------------------
 
