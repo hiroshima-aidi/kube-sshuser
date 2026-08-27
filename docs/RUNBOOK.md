@@ -43,7 +43,7 @@ kube-sshuser の問題ではありません。** ただしクォータ不足や�
 ```bash
 sudo python3 -m venv /opt/venv
 sudo /opt/venv/bin/pip install --upgrade pip
-sudo /opt/venv/bin/pip install "git+https://github.com/hiroshima-aidi/kube-sshuser.git"
+sudo /opt/venv/bin/pip install "git+https://github.com/hiroshima-aidi/kube-tools.git#subdirectory=packages/kube_sshuser"
 export PATH="/opt/venv/bin:$PATH"
 ```
 

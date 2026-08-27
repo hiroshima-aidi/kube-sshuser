@@ -7,7 +7,7 @@ CLI tool for managing JupyterHub on Kubernetes (k3s compatible).
 Install from GitHub:
 
 ```bash
-pip install git+https://github.com/hiroshima-aidi/kube-jupyterhub.git
+pip install "git+https://github.com/hiroshima-aidi/kube-tools.git#subdirectory=packages/kube_jupyterhub"
 ```
 
 Or for development:

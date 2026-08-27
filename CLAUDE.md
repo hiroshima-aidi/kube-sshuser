@@ -2,190 +2,291 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
-## Overview
+## このリポジトリの性質
 
-`kube-sshuser` は、Kubernetes 上にユーザごとの SSH 環境（namespace / PVC / ResourceQuota / SA+RBAC / Deployment / NodePort Service）を作成・変更・削除する **管理者向け** CLI。README.md は日本語で書かれており、ユーザ向けドキュメントの実体はそちら。
+`hiroshima-aidi/kube-tools` は、研究室の Kubernetes 運用ツールを 1 つにまとめた**モノレポ**。
+以前は 4 つの独立したリポジトリだった（`admin-tool` = kube-sshuser、`docker-ssh` = ssh-for-k8s、
+`kube-jupyterhub`、`jupyter-gpu`）。Phase 2 で `kube-sshuser` を `kube-tools` に rename し、
+残り 3 つを `git subtree` で履歴ごと取り込んだ。
 
-**このツールの担当範囲は「入れ物」まで。** 隣接リポジトリとの境界を取り違えないこと:
-
-- `docker-ssh` — SSH コンテナイメージと `gpu-dev`（利用者が GPU Pod を起動・停止するツール）。本リポジトリが `--image` に指定するのがこのイメージ
-- `kube-jupyterhub` — JupyterHub 管理 CLI。**JupyterLab/JupyterHub は本リポジトリの対象外**
-- `jupyter-gpu` — Jupyter イメージのビルド
-
-**PVC は SSH Pod にマウントされない。これは意図的な設計。** RWO の multi-attach を避けるため SSH コンテナは入口に徹し、PVC は利用者が `gpu-dev up` で起動する GPU Pod に `/workspace` としてマウントされる（`gpu_dev_pod.py` が `claimName` を指定する）。manifest の Role が pods の create/delete/exec/portforward を許しているのは、SSH コンテナ内から ServiceAccount で `gpu-dev` を動かすため。「PVC が未使用」と誤読しないこと。
-
-## Commands
-
-```bash
-# 開発用インストール（Python >= 3.9、ランタイム依存パッケージなし）
-python3 -m venv .venv && .venv/bin/pip install -e .
-
-# 実行
-.venv/bin/kube-sshuser <create|modify|delete|show|list|status|terminate> ...
-python -m kube_sshuser.cli ...   # 同等
+```
+packages/kube_sshuser/     kube-sshuser CLI（管理者）
+packages/kube_lab/         gpu-dev CLI（学生）。中身はまだ src/ssh_tool/ — 改名は Phase 2.5
+packages/kube_jupyterhub/  kube-jupyterhub CLI（管理者・別系統）
+images/ssh/                SSH コンテナイメージ（Dockerfile + entrypoint.sh）
+images/jupyter/            Jupyter イメージ（独自 Makefile をルートから委譲）
+docs/RUNBOOK.md            管理者向け運用手順書
+docs/user/kube-lab.md      学生向け gpu-dev の使い方（旧 docker-ssh の README）
+skills/kube/               Claude Code 用 Skill
 ```
 
-テストスイート・lint 設定・CI はこのリポジトリには無い。動作確認は実クラスタ（`kubectl` が通る環境）に対して行う前提。マニフェスト生成部分だけは kubectl 無しで確認できる:
+**各パッケージ / イメージに CLAUDE.md がある。**作業対象が決まったらそちらを読む。
+この文書はパッケージ間の関係だけを扱い、個々の作り込みには立ち入らない。
 
-```bash
-python -c "from kube_sshuser.provision_manifest import build_manifest; ..."
+**`packages/kube_lab` が SSH イメージに焼き込まれる**のがモノレポ化の決め手。Dockerfile の
+`COPY packages/ /build/packages/` 1 行で済み、RBAC と gpu-dev の同時変更が 1 つの diff に入る。
+
+**旧リポジトリ名との対応**（外部の issue や古い URL を扱うとき用）:
+`admin-tool` → `packages/kube_sshuser`、`docker-ssh` → `packages/kube_lab` + `images/ssh`、
+`jupyter-gpu` → `images/jupyter`。GitHub の rename リダイレクトにより
+`git+https://github.com/hiroshima-aidi/kube-sshuser.git` も当面は解決するが、
+**`#subdirectory=packages/kube_sshuser` が無いとインストールは失敗する**。
+
+## 全体の流れ（どのパッケージが何をするか）
+
+```
+[管理者] kube-sshuser create taro ...        ← packages/kube_sshuser
+             ↓ 作るのは「入れ物」まで
+         namespace ns-taro / PVC workspace / ResourceQuota / SA+RBAC / SSH Pod (NodePort 31000-31999)
+             ↓
+[利用者] ssh -p 31007 taro@<host>            ← SSH イメージは images/ssh 製
+             ↓ SSH コンテナ内で
+         gpu-dev up --gpu 1                  ← PVC を /workspace にマウントした GPU Pod
+
+[別系統] kube-jupyterhub apply / refresh / list / pvc
+         images/jupyter（Jupyter イメージのビルド）
 ```
 
-リリースは `pyproject.toml` の `version` を上げ、`v0.x.y` というコミットメッセージ 1 本で行うのが慣例（git log 参照）。
+**JupyterHub 系（`kube_jupyterhub` / `images/jupyter`）と SSH 系（`kube_sshuser` / `kube_lab`）は別系統。**
+同じクラスタ・同じユーザ台帳を共有しているかは未確認。片方の変更をもう片方に波及させないこと。
 
-## Architecture
+## 入口コマンド
 
-**副作用は全て `kubectl` サブプロセス経由。** Kubernetes Python クライアントは使わない。すべての外部実行は `common.run()` を通り、実行コマンドが `[cmd] ...` として stderr に出る。`check=True` での失敗は `common.KubectlError`（コマンド文字列・終了コード・stderr を保持）になり、`common.cli_main()` が各エントリポイントでそれを短いエラーメッセージに変換する。**この例外型は `provision_user.py` の NodePort 衝突リトライが判定に使う**ので、握り潰したり型を変えたりしないこと。JSON 取得は **`common` の 2 本立て**で、名前で使い分けを強制している:
+詳細は各 `CLAUDE.md`。ここは「どこで何を打つか」の索引。**すべてリポジトリルートから。**
 
-- `kubectl_get_json()` — **失敗時 `None`**。「無いのが正常」な存在確認用（`doctor` / `delete_user` / `provision_kubectl`）。
-- `kubectl_get_json_or_raise()` — **失敗時 `KubectlError`**。取れないと続行できない箇所用（`status` / `terminate_pod`）。
+```bash
+# Python パッケージ（全部 editable で入れる）
+make dev-install
 
-以前は `status.py` と `terminate_pod.py` が `kubectl_get_json` という**同名のローカル関数**を持ち、`common` 版と挙動が逆（例外 vs None）だった。Phase 1 で削除し `common` に寄せてある。ローカル版が投げていたのは素の `RuntimeError` で `cli_main()` に捕まらず traceback になっていたが、`KubectlError`（`RuntimeError` のサブクラス）に変わったので短いエラーメッセージと正しい終了コードになる。
+kube-sshuser <create|modify|delete|show|list|status|terminate|doctor> ...
+kube-jupyterhub <apply|refresh|refresh-full|list|pvc> [--context ...] [--dry-run]
 
-**kube-context は `common` のモジュール状態。** 各 `main()` の冒頭で `set_kube_context(args.kube_context)` を呼び、`run()` が `kubectl` 呼び出しに `--context` を注入する。新しいサブコマンドを足すときは `add_context_argument()` と `set_kube_context()` を忘れないこと。
+# SSH イメージ（ビルドコンテキストはリポジトリルート）
+make ssh-build IMAGE=docker-ssh:latest
+make ssh-push GITHUB_USER=... GITHUB_TOKEN=...   # ghcr.io へ（.env でも可）
+make ssh-build-import                            # ビルド + k3s の containerd へ import
 
-**二層 CLI と、二種類の委譲。** `cli.py` がユーザ向けの argparse フロントエンド。委譲の仕方が 2 通りあるので注意:
+# Jupyter イメージ（images/jupyter/Makefile へ委譲。jupyter- を前に付ける）
+make jupyter-build STACK=cpu WITH_IJULIA=1       # cpu | cuda12.2 | cuda11.8
+make jupyter-push STACK=cuda12.2 IMAGE_TAG=2026.04.01
+make jupyter-push-all
+make jupyter-help                                # Jupyter 側の全ターゲットと変数
+```
 
-- `create` / `delete` は対象モジュールの `build_option_parser()` を argparse の `parents=` で取り込み、パース済み Namespace をそのまま `run_with_args(ns)` に渡す。**オプション定義は各モジュール側の 1 箇所にしかない**ので、追加時に `cli.py` を直す必要はない。
-- `modify` / `status` / `terminate` / `doctor` は `cli.py` 側で引数を定義し、argv を組み立て直して `main(argv)` に渡す。こちらは両側に同じ変更が要る。
+**Jupyter だけ委譲なのは意図的。** あの Dockerfile 群は `requirements/` と `scripts/` を
+ビルドコンテキスト相対で `COPY` するので、コンテキストは `images/jupyter` のままにする必要がある。
+`$(MAKE) -C images/jupyter` なら発行されるコマンドが単独リポジトリ時代と完全に一致する。
 
-`show` / `list` だけは kubectl を使わずレジストリを直接読むので `cli.py` 内で完結。
+**テストファイルは 0 件**（`images/jupyter/scripts/smoke_test.sh` のみ）。
+`kube_jupyterhub` は dev extras に pytest を宣言しているがテストは無い。
 
-**状態は二重管理。** 真実の状態はクラスタ側にあるが、ローカルにも `--out-dir` 配下のファイルベースのレジストリを持つ。既定値は `common.default_out_dir()`（`$KUBE_SSHUSER_OUT_DIR`、未設定なら `./output`）で、全サブコマンドが `common.add_out_dir_argument()` 経由で統一している:
+## パッケージをまたぐ結合点（変更時に必ず両方を見る）
 
-- `<out-dir>/<user>/provision-<user>.yaml` — 生成マニフェスト
-- `<out-dir>/_registry/users/<user>.json` — ユーザ 1 件の最新状態（`status`: active / deleting / deleted）
-- `<out-dir>/_registry/events.ndjson` — create / modify / delete の追記型監査ログ
+- **RBAC と `gpu-dev` は密結合。** `kube_sshuser/provision_manifest.py:117-135` の Role を、SSH コンテナ内の
+  `gpu-dev` が ServiceAccount で使う。突き合わせ済みの結果:
+  **`pods/log` / `persistentvolumeclaims` / `events` は gpu-dev が一度も使っていない過剰付与**、
+  逆に `auth can-i`（`kube_lab` の `gpu_dev_k8s.py:100`）が要る `selfsubjectaccessreviews` は Role に無い。
+- **PVC は SSH Pod にマウントされない（意図的）。** RWO の multi-attach を避けるため。
+  マウントするのは `gpu-dev up` が起こす GPU Pod 側（`kube_lab` の `gpu_dev_pod.py` が `claimName` を指定）。
+- **PVC 名 `workspace` が両側の暗黙の契約。** admin 側 3 箇所（`provision_user.py:74`,
+  `doctor.py:115`, `modify_user.py:164`）と `kube_lab` の `gpu_dev_defaults.py:5` に**独立したリテラル**として
+  あり、`--pvc-name` を既定から変えて払い出すと gpu-dev が黙って壊れる。
+- **名前正規化が 3 実装で、規則が実際に食い違う。** 同じ入力を通して確認済み:
 
-`registry.py` がこの層。書き込みは `update_user_record()`（deep merge + `updated_at` 更新）と `append_event()`。**公開鍵の平文はレジストリに保存しない** — `extract_public_key_metadata()` が type / comment / `fingerprint_sha256` だけを残す。`create` は既存レコードが `status == "active"` なら中断する（再作成には先に `delete`）。
+  | 入力 | `common.normalize_name()` | `sanitize_k8s_name()` | `entrypoint.sh` |
+  |---|---|---|---|
+  | `山田` / `é` | ValueError | **そのまま通過**（不正な k8s 名） | `''`（無言で空） |
+  | `___` | ValueError | `user` | `''` |
+  | 70 文字 | **63 に切り詰め** | 切り詰めなし | 切り詰めなし |
 
-レコードの `namespace.spec` は `requested`（CLI 引数）と `observed`（`collect_observed_namespace_spec()` がクラスタから読み戻した実値）を分けて持つ。この drift 検出用の構造を壊さないこと。
+  `sanitize_k8s_name()` が `ch.isalnum()` を使う（`kube_lab` の `gpu_dev_identity.py:11`）ため非 ASCII が
+  素通りする。その値はラベル値 `logical-name` にも入るので **`gpu-dev up --name テスト` は
+  apply が失敗する**。63 文字の差は、長いユーザ名で admin と gpu-dev の namespace がずれる。
+- **kubectl ラッパが 6 実装 + 素の `subprocess.run` が 5 箇所。** `kubectl_get_json()` は同名で
+  3 つあり、**`common.py:112` は失敗時 `None`、`status.py:25` は `RuntimeError` と挙動が逆**
+  （`terminate_pod.py:20` はその丸写し）。`--context` は Phase 1 で `kube_jupyterhub` にも入り、残るは `kube_lab`。
+- **イメージの受け渡し。** `kube-sshuser create --image` に渡すのが `images/ssh` がビルド・push するイメージ
+  （`ghcr.io/hiroshima-aidi/ssh-for-k8s`）。
+- **ドキュメントの同期は手動。** `docs/RUNBOOK.md` §1 の `gpu-dev` の説明は
+  `docs/user/kube-lab.md`（旧 docker-ssh README）から書き写したもの。追随させる仕組みは無い。
+  **モノレポになったので、今は同じ diff で直せる。**
+- **`gpu-dev` は sudo ではなく通常ユーザで実行する**（決着済み）。owner を `$USER` から取り、
+  kubeconfig が SSH ユーザの `$HOME` にあるため、sudo だと両方外れる。`docs/user/kube-lab.md` の図を直し、`warn_if_root()` を追加済み。
 
-**マニフェストは f-string で生成する（YAML ライブラリではない）。** `provision_manifest.py` の `build_manifest()` が 1 本の複数ドキュメント YAML 文字列を返し、`kubectl apply -f -` に stdin で渡す。人間向けの表示名・説明はアノテーション（`provision-user.openai.local/display-name` / `.../description`）としてインデント指定つきで差し込まれる。値を埋め込む際は `json.dumps()` でクォートするのが既存の流儀。
+## 統合リファクタリング（進行中）
 
-**識別に使うラベル/アノテーションは `labels.py` に集約済み**（Phase 1）。以前は 6 モジュールに、しかも
-**形式まで違う 2 通り**（`"key=value"` のセレクタ文字列と、key / value 別定数）で散っていた。
+**承認済みの計画**: `~/.claude/plans/playful-enchanting-prism.md`。着手前に必ず読むこと。
 
-- `MANAGED_NAMESPACE_SELECTOR` = `app.kubernetes.io/managed-by=provision-user` — 管理対象 namespace の基準
-- `SSH_APP_SELECTOR` = `app.kubernetes.io/name=ssh-user`、`USER_LABEL_KEY` — SSH Pod の特定
-- `DISPLAY_NAME_ANNOTATION` / `DESCRIPTION_ANNOTATION`
-- `user_selector(username)` — 管理対象 + ユーザの複合セレクタ
+方針は **モノレポ化 + 共通コア `kubelab_core` の切り出し**を Phase 0〜6 で段階実行。
+決め手は、`gpu-dev` が SSH イメージに焼き込まれる点 — 別リポジトリのままだと Dockerfile が
+「GitHub から pip install」か vendoring になり、ビルドの再現性と RBAC の同時変更レビューが
+両方壊れる。同一リポジトリなら `COPY packages/ /build/packages/` の 1 行で済む。
 
-`provision_manifest.py` の YAML テンプレートも f-string 内で定数を展開している。**値は一切変えていない**
-（`build_manifest()` の出力はバイト単位で一致することを確認済み）。`openai.local` の置換は Phase 6。
-定数化してあるので、そのときの変更は 1 ファイルで済む。
+決定事項:
 
-**NodePort は自前で割り当てる。** `--port` 省略時は `get_used_nodeports()` が全 namespace の Service を舐めて 31000–31999 の空きを探す（`provision_kubectl.py`）。
+- **リポジトリは `hiroshima-aidi/kube-sshuser` を rename して `kube-tools`**（新規作成しない。
+  GitHub の rename リダイレクトで既存の pip URL が生きる）
+- **学生向け CLI `gpu-dev` は `kube-lab` に改名**（Phase 2.5。旧名をエイリアスで 1 学期並走）
+- **リポジトリ名と CLI 名は分ける** — 両方 `kube-lab` だと repo と CLI が区別できない
+- `jupyter-gpu`（remote が `rellab`）も取り込む
+- RBAC の過剰付与（`pods/log` / `pvc` / `events`）は削る
 
-**`terminate --all` は namespace 内の全 Pod が対象で、SSH Pod も含む**（ラベルで絞っていない）。
-これは意図的: `--all` の help も「delete all pods in the namespace」で、SSH Pod は Deployment 配下なので
-自動で作り直される（学生の SSH セッションは切れる）。削除前に対象 Pod 一覧を JSON で表示してから
-確認プロンプトを出すので、`ssh-<user>` が並ぶことは実行者に見えている。
-
-**`modify` は Pod を再起動しない操作だけを扱う。** アノテーション更新 / ResourceQuota の patch / PVC の拡張（縮小不可）に限定されている。イメージ変更など再作成が要るものをここに足さないこと。
-
-**レジストリとクラスタの乖離は `doctor.py` が検出する。** `list`（台帳のみ）と `status`（クラスタのみ）は互いを見ないので、突き合わせはここに集約されている。verdict は `missing-in-cluster` / `orphan-namespace` / `untracked-namespace` / `drift` / `ok`。
-
-**`create --dry-run` はクラスタにもレジストリにも触れない。** `run_with_args()` の冒頭で分岐してマニフェストだけ出力する。この経路が副作用を持たないことが、Claude Code の Skill から「実行前に内容を見せる」運用の前提になっている。
-
-**命名。** namespace は既定で `normalize_name(f"ns-{user}")`（小文字化・非英数をハイフンに・63 文字切り詰め）。
-
-## ドキュメントと Skill
-
-- `docs/RUNBOOK.md` — ユースケース別の運用手順書（日本語）。単一のソース
-- `skills/kube/SKILL.md` — Claude Code 用 Skill。判断と安全ルールのみを持ち、詳細は `references/runbook.md`（`docs/RUNBOOK.md` への相対 symlink）に委ねる
-- `scripts/install-skill.sh` — `~/.claude/skills/kube` をリポジトリ内 `skills/kube` への symlink にする。`git pull` で CLI・手順書・Skill が同時に更新される設計
-- `.claude/settings.json` — 参照系コマンドのみ事前許可。変更系は必ずプロンプトさせる
-
-CLI の挙動を変えたら、`docs/RUNBOOK.md` の該当セクションと `skills/kube/SKILL.md` の安全ルールも合わせて見直すこと。
+後回しにするもの（いずれも破壊的）: 台帳と PVC の一本化（NFS 導入と合わせて設計）、
+ラベルドメイン `provision-user.openai.local` の置換（稼働中リソースが持っており、
+`status` / `doctor` / `delete-user` のセレクタが依存している）。
 
 ---
 
-## 現状の記録（2026-08-26 時点／統合リファクタリング前）
+## セッションログ
 
-研究室の Kubernetes まわりのツールが 4 リポジトリに分かれており、**これらをまとめて
-リファクタリングする方針**が出ている。着手する際の前提としてここに記録を残す。
+### 2026-08-26
 
-### リポジトリ構成
+**やったこと**
 
-| リポジトリ | remote | パッケージ / エントリポイント | 最終更新 |
-|---|---|---|---|
-| admin-tool（本リポジトリ） | `hiroshima-aidi/kube-sshuser` | `kube_sshuser` / `kube-sshuser` | 2026-08-26 |
-| docker-ssh | `hiroshima-aidi/ssh-for-k8s` | SSH イメージ + `ssh_tool`（`gpu-dev`） | 2026-04-16 |
-| kube-jupyterhub | `hiroshima-aidi/kube-jupyterhub` | `kube_jupyterhub` / `kube-jupyterhub` v0.2.0 | 2026-04-20 |
-| jupyter-gpu | `rellab/jupyter-gpu` | Makefile ベースのイメージビルド | 2026-04-20 |
+- 4 リポジトリすべてに CLAUDE.md を整備し、このワークスペース CLAUDE.md を新設
+- 統合の是非を調査。名前正規化 3 実装の食い違い、kubectl ラッパ 6 実装、RBAC の過不足、
+  PVC 名の暗黙の契約を実コードで確認（結果は上記「結合点」に反映）
+- 統合計画を策定・承認（`~/.claude/plans/playful-enchanting-prism.md`）
+- **Phase 0（前始末）を実行**:
+  - `jupyter-gpu`: `IMAGE_TAG` を `2026.04.01` に統一、`.DS_Store` を gitignore
+  - `admin-tool`: `harden-and-skill` を **ff マージで main へ**（v0.5.0 + doctor + RUNBOOK
+    + Skill）、README に「実クラスタ未検証」の注記。**タグは打っていない**
+  - `docker-ssh`: **sudo の矛盾を決着** — README の図から sudo を削り、`warn_if_root()` を追加
+  - 4 リポジトリすべて main・クリーン・push 済み
 
-ローカルでは `~/Documents/` 直下に並んでいる。**ディレクトリ名とリポジトリ名が一致していない**
-点に注意（`admin-tool` → `kube-sshuser`、`docker-ssh` → `ssh-for-k8s`）。
+**保留中のタスク**
 
-### 責任分界（現状）
+（Phase 0-4 のスナップショットは 2026-08-27 に取得済み。下記セッションログ参照）
 
-```
-[管理者] kube-sshuser create taro ...
-             ↓ 作るのは「入れ物」まで
-         namespace ns-taro / PVC workspace / ResourceQuota / SA+RBAC / SSH Pod (NodePort)
-             ↓
-[利用者] ssh -p 31007 taro@<host>          ← SSH イメージは docker-ssh 製
-             ↓ SSH コンテナ内で
-         gpu-dev up --gpu 1                 ← PVC を /workspace にマウントした GPU Pod
-         gpu-dev status / down
+**次のセッションへの申し送り**
 
-[別系統] kube-jupyterhub apply / refresh / list / pvc   ← Helm で JupyterHub を管理
-         jupyter-gpu                                     ← Jupyter イメージのビルド
-```
+- **Phase 1（無害な規約統一）はクラスタ不要**なので、スナップショットを待たずに着手できる。
+  内容: docker-ssh の Makefile 残骸削除、kube-jupyterhub に `--context` / `--dry-run` /
+  typed confirm を追加、admin-tool のローカル kubectl ラッパを `common` に寄せる、ラベル定数化
+- Phase 1 の合否判定は **`build_manifest()` の出力が前後で完全一致すること**（挙動を変えない）
+- `admin-tool` の `harden-and-skill` ブランチはマージ済みだがローカルに残っている。削除可
 
-- **kube-sshuser と kube-jupyterhub は別系統。** 同じクラスタを使うのかどうか、
-  ユーザ・PVC・クォータを共有するのかは **未確認**。統合を検討する際の最初の確認事項。
-- `gpu-dev` は SSH コンテナ内から ServiceAccount で kubectl 相当の操作をする。
-  そのための RBAC を発行しているのが本リポジトリの `provision_manifest.py`。
-  **両者は Role の権限セットで密結合している**（pods の create/delete/exec/portforward、
-  pvc の get/list）。片方だけ変えると壊れる。
+### 2026-08-27
 
-### 統合を検討する際の論点
+**Phase 0-4（クラスタのスナップショット）完了。** `snapshot-2026-08-27/` に保存。
 
-1. **ユーザの概念が二重化している。** kube-sshuser は namespace 単位のユーザを台帳で管理し、
-   kube-jupyterhub は JupyterHub 側のユーザを持つ。同一人物を両方で払い出す運用なら、
-   台帳の一本化が最大の争点になる。
-2. **PVC の共有。** kube-sshuser の `workspace` PVC（RWO）と JupyterHub の PVC が別物なら、
-   利用者から見て「データが 2 か所にある」状態になる。NFS（購入済み・未対応）を入れる際に
-   まとめて設計し直すのが自然。
-3. **CLI を統合するか、並置のままにするか。** `kube-sshuser` / `kube-jupyterhub` は
-   どちらも kubectl サブプロセス方式で、レジストリの有無だけが違う。共通化するなら
-   `common.py`（`run` / `KubectlError` / context / out-dir）が土台になる。
-4. **ラベルのドメインが `provision-user.openai.local`。** 研究室のツールとして不適切だが、
-   既存クラスタ上のリソースが古いラベルを持つため一括置換は破壊的。統合のタイミングが
-   変え時だが、新旧両対応の移行期間が要る。
+アクセス経路: `ssh -i ~/Dropbox/utilities/REL2.pem reladmin@clarinet.rel.hiroshima-u.ac.jp`
+（このマシンから鍵認証で入れる。kubectl は reladmin の `~/.kube` で設定済み）
 
-### 未解決の食い違い
+分かったこと:
 
-- **`gpu-dev` の sudo 問題は決着済み**（2026-08-26）。`build_summary()` の notes が正しく、
-  通常ユーザで実行する。sudo だと `$USER` と `$HOME` が root のものになり、Pod の owner
-  ラベルと ServiceAccount の kubeconfig が両方外れる。docker-ssh 側で README の図を直し、
-  `warn_if_root()` を追加した。
-- 本リポジトリの `docs/RUNBOOK.md` §1 で利用者に伝える `gpu-dev` の使い方は
-  docker-ssh の README から書いた。docker-ssh 側が更新されたら追随が要る
-  （**現状この 2 つを同期させる仕組みは無い**）。
+- クラスタは **k3s v1.34.6、3 ノード**: `clarinet`(control-plane) / `flute` / `triangle`
+- **SSH 系の実ユーザは `ns-okamumu` の 1 人だけ。** namespace 名の最大長は **10 文字**
+  → **Phase 3 の名前正規化統一（63 文字切り詰め）は完全に無害**と確定
+- `ns-okamumu`: SSH Pod 1（`ghcr.io/hiroshima-aidi/ssh-for-k8s:latest`、NodePort **31000**、
+  131 日稼働）/ PVC `workspace` 100Gi / SA `ssh-user` + `ssh-user-role` + binding /
+  ResourceQuota `quota`（GPU 2、cpu 16、mem 64Gi）
+- **`gpu-dev` の Pod は現在 0 件**（`-l app=gpu-dev` で No resources found）
+  → Phase 2.5 の `kube-lab` 改名時に生きた Pod を壊す心配は無い
+- **ResourceQuota の `requests.storage` が 100Gi/100Gi で使い切り。** PVC を追加払い出すと
+  即失敗する。クォータ既定値の見直しが要る（新規論点）
+- ラベルドメイン `provision-user.openai.local/user` は Service / Deployment の
+  **selector に入っている**（＝置換は Deployment 再作成が必須）。CLAUDE.md の既存の
+  「後回し」判断はそのまま妥当
+- 台帳は **ログインノードの `~/output/_registry`**（`KUBE_SSHUSER_OUT_DIR` は未設定で既定値）。
+  `users/` に `okamumu` / `taro` / `taro2`（後 2 者はテスト残骸）。`output-backup/` に退避済み
+- **ログインノードに `kube-sshuser` は入っていない**（`which` が空）。運用は手書きの
+  `~/apply.sh` / `~/refresh-user.sh` / `~/refresh-user-full.sh` + `~/output/okamumu/provision-okamumu.yaml`。
+  README の「実クラスタ未検証」は文字通りで、**CLI は本番で一度も使われていない**
+- JupyterHub 系は別 namespace `jupyterhub` に PVC 8 件（claim-* 各 10Gi）+ hub-db-dir で稼働中
 
-### 本リポジトリで積み残している改善（レビュー済み・未着手）
+**次にやること**
 
-`kube-sshuser` 単体のコードレビューで挙がったもののうち、まだ入れていないもの。
-統合リファクタリングで一緒に片付ける候補。
+- **Phase 1（無害な規約統一）に着手可**（クラスタ不要。合否は `build_manifest()` の出力一致）
+- 新規論点: ResourceQuota の `requests.storage` 使い切り、台帳のテストユーザ `taro` / `taro2` の掃除、
+  ログインノードの手書きスクリプトと `kube-sshuser` の実際の差分の突き合わせ
 
-- **LimitRange が無い。** ResourceQuota が `limits.cpu` / `limits.memory` を hard 指定して
-  いるため、利用者の Pod は requests/limits の明示が必須になり `must specify limits.cpu` で
-  弾かれる。namespace に LimitRange を同梱すれば解消する（**利用者体験への影響が最も大きい**）
-- **公開鍵の更新手段が無い。** 現状は `kubectl set env deploy/ssh-<user> SSH_PUBLIC_KEY=...`
-  という回避策のみで、台帳の fingerprint が更新されない。公開鍵を Secret に移せば
-  無停止更新の道が開けるが、docker-ssh のイメージ側の対応が要る
-- `modify` のクォータ縮小に事前チェックが無い（使用中より小さい値にできてしまう）
-- `--gpu-quota` に負値を渡すと ResourceQuota ごと作られない隠れ仕様（`provision_manifest.py`）
-- `list` と `status` の出力形式が不統一（前者は key=value 羅列、後者はテーブル）
+### 2026-08-27（続き）
 
-### 直近の変更（v0.5.0、未リリース）
+**Phase 1（無害な規約統一）完了。3 リポジトリとも main・クリーン・push 済み。**
 
-ブランチ `harden-and-skill` に以下が入っている。**main には未マージ。**
+| リポジトリ | コミット | 内容 |
+|---|---|---|
+| `docker-ssh` | `e2d2468` | Makefile の残骸削除（`ADMIN_DIR` / `VENV` / `venv` / `admin-install` / `clean-venv`） |
+| `kube-jupyterhub` | `86f84d3` | `--context` / `--dry-run` / `refresh-full` の typed confirm、実行経路を `run()` に一本化 |
+| `admin-tool` | `f04609e` | ラベル定数を `labels.py` に集約、`kubectl_get_json` の重複解消 |
 
-- 事故要因の修正: NodePort リトライの不発、delete の namespace 推測、create の重複チェック、
-  out-dir の cwd 依存、create/delete の help 欠落、context 未表示、delete の確認強化
-- 追加: `create --dry-run`、`kube-sshuser doctor`、`docs/RUNBOOK.md`、`skills/kube/`（Claude Code 用 Skill）
-- 実クラスタでの検証は未実施（`kubectl apply --dry-run=client` と Skill の実挙動が残っている）
+**合否判定はすべてクリア:**
+
+- `build_manifest()` の出力が 6 ケースで**バイト単位一致**（ラベル定数化の前後）
+- `kube-sshuser` の `--help` が全サブコマンドで**完全一致**
+- `make -n` の出力が ssh-build / ssh-buildx / ssh-push / ssh-import / ssh-build-import / clean で**完全一致**
+- `kube-jupyterhub --help` の差分は**追加した 2 フラグのみ**
+
+**計画からの変更点（1 件）**
+
+- 計画は「admin-tool のローカル kubectl ラッパを `common` に寄せると**初めて `--context` が効く**ので
+  Phase 3 の実クラスタ検証項目に入れる」としていたが、**これは誤り**。ローカル版も `common.run()` を
+  呼んでおり、`--context` は既に効いていた。実際の差は**失敗時の挙動だけ**（ローカル＝`RuntimeError`、
+  common＝`None`）。そこで単純な統合ではなく、用途で 2 本に分けた:
+  `kubectl_get_json()`（失敗時 None、存在確認用）と `kubectl_get_json_or_raise()`（失敗時 `KubectlError`）。
+  **Phase 3 の実クラスタ検証項目からこの 1 件は落として良い。**
+
+**挙動が変わったもの（意図的、3 件）**
+
+1. `kube-jupyterhub refresh-full` の中止が exit 0 → **exit 1**（スクリプトから中止と完了を区別できる）
+2. `kube-jupyterhub` のログ prefix が `[CMD]`(stdout) → `[cmd]`(stderr)、`prepull_images()` の
+   DaemonSet apply も `run()` 経由になり `--context` / `--dry-run` が効くようになった
+3. `status` / `terminate-pod` の kubectl 失敗が traceback → `KubectlError` 経由の短いエラーと正しい終了コード
+
+**確認して変えなかったもの**
+
+- `terminate --all` が SSH Pod も消す件は**意図的**。help も「delete all pods in the namespace」で、
+  SSH Pod は Deployment 配下なので自動で作り直される。削除前に対象 Pod 一覧を JSON で出してから
+  確認プロンプトなので、`ssh-<user>` が並ぶことは実行者に見えている。学生の SSH セッションは切れる。
+
+**次にやること**
+
+- **Phase 2（モノレポ統合）**。クラスタ不要。`kube-sshuser` を GitHub 上で `kube-tools` に rename し、
+  `git subtree add` で 3 つを履歴ごと取り込む。**rename は GitHub 側の操作なのでユーザの作業が要る。**
+- `admin-tool` の `harden-and-skill` ブランチはマージ済み。ローカルに残っているので削除可
+
+### 2026-08-27（Phase 2）
+
+**Phase 2（モノレポ統合）完了。** `kube-sshuser` を GitHub 上で `kube-tools` に rename
+（ユーザ実施）、残り 3 リポジトリを `git subtree add` で履歴ごと取り込み、最終レイアウトへ移動した。
+**66 ファイルすべて git が rename として検出**（＝内容は動いていない）。
+
+**合否判定（Phase 2 はクラスタ不要、すべてクリア）:**
+
+- SSH イメージの新旧比較: `find /opt/venv/lib -name '*.py'` が **749 ファイルで完全一致**
+- `gpu-dev --help` が新旧イメージで**バイト一致**（`up` / `down` / `status` 含む）
+- `/entrypoint.sh` の md5 が新旧イメージで一致
+- `kube-sshuser --help` / `kube-jupyterhub --help` が全サブコマンドで**バイト一致**
+- `make -n ssh-*` の発行コマンドが Dockerfile パス以外**完全一致**
+- `make -n jupyter-build` が単独リポジトリ時代と**同一のコマンド・同一のイメージタグ**
+
+**設計判断（計画から具体化した点）**
+
+- **Jupyter の Makefile は統合せず `$(MAKE) -C images/jupyter` に委譲した。** あの Dockerfile 群は
+  `requirements/` と `scripts/` をビルドコンテキスト相対で `COPY` するので、コンテキストを
+  `images/jupyter` に保つ必要がある。委譲なら 257 行を書き換えずに発行コマンドが完全一致する。
+  ルートからは `make jupyter-<target>` で届く（`jupyter-%` パターンルール）。
+- **Dockerfile の wheel ビルドを `--outdir /build/dist packages/kube_lab` に変更。**
+  `COPY packages/ /build/packages/` としたので、Phase 3 で `kubelab_core` を同じ venv に
+  入れるときは `-m build` を 1 行足すだけで済む。
+- **`docs/RUNBOOK.md` と `skills/` の相対関係は動かしていない。**
+  `skills/kube/references/runbook.md -> ../../../docs/RUNBOOK.md` は解決を確認済み。
+  `scripts/install-skill.sh` もリポジトリルート相対なのでそのまま動く。
+
+**壊してはいけないものの扱い**
+
+- `pip install git+.../kube-sshuser` → **`git+https://github.com/hiroshima-aidi/kube-tools.git#subdirectory=packages/kube_sshuser`**
+  に更新（RUNBOOK §0.1 / 両 README を同時に）。互換 shim のルート pyproject は置いていない。
+  **旧 URL は GitHub のリダイレクトで解決するが `#subdirectory=` が無いと失敗する**ので、
+  古い手順書を見ている人には新 URL を案内すること。
+- `output/_registry` は `.gitignore` 済みで移動対象外。クラスタ操作は一切していない。
+- イメージ名 `ghcr.io/hiroshima-aidi/ssh-for-k8s` / `ghcr.io/rellab/jupyter-gpu` は不変。
+
+**次にやること**
+
+- **Phase 2.5（`gpu-dev` → `kube-lab` 改名）**。クラスタ不要。`packages/kube_lab` の中身は
+  まだ `src/ssh_tool/` のままなので、モジュール名・配布名・`gpu_dev*.py` のリネームと
+  エイリアス並走をここで入れる。
+- ワークスペース `~/Documents/kube` にはまだ旧 4 ディレクトリが残っている。
+  `admin-tool/` が新しい `kube-tools` リポジトリ本体。他 3 つは統合済みなので整理して良い。

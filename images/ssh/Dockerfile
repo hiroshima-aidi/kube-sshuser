@@ -11,11 +11,14 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 WORKDIR /build
-COPY ssh_container/ /build/
+# The whole packages/ tree, not just this one package: from Phase 3 the shared
+# kubelab_core is built into the same venv, and that is the reason these live in
+# one repository at all.
+COPY packages/ /build/packages/
 
 RUN python3 -m venv /opt/venv && \
     /opt/venv/bin/pip install --upgrade pip build && \
-    /opt/venv/bin/python -m build --wheel
+    /opt/venv/bin/python -m build --wheel --outdir /build/dist packages/kube_lab
 
 # ---------------------------------------------------------
 # final
@@ -58,7 +61,7 @@ RUN python3 -m venv /opt/venv && \
 
 ENV PATH="/opt/venv/bin:${PATH}"
 
-COPY ssh_container/entrypoint.sh /entrypoint.sh
+COPY images/ssh/entrypoint.sh /entrypoint.sh
 RUN chmod +x /entrypoint.sh
 
 ENV SSH_USER=sshuser

@@ -26,12 +26,13 @@ make ssh-build-import                            # build + import（k3s ノー�
 make clean                                       # __pycache__ / *.egg-info の掃除
 ```
 
-- **ビルドコンテキストはリポジトリルート**（`-f ssh_container/Dockerfile .`）。Dockerfile 内は
-  `COPY ssh_container/ ...` と書く。`cd ssh_container` してビルドすると壊れる。
+- **ビルドコンテキストはリポジトリルート**（`-f images/ssh/Dockerfile .`）。Dockerfile 内は
+  `COPY packages/ /build/packages/` と書き、`packages/kube_lab` を wheel にする。
+  `packages/` を丸ごと入れるのは、Phase 3 で共通コア `kubelab_core` を同じ venv に入れるため。
 - push の認証は `GITHUB_USER` / `GITHUB_TOKEN`。ルートの `.env` が Makefile から自動 include される
   （`.env.example` 参照。`.env` はコミットしない）。
 - テスト・lint・CI は無い。動作確認は実際にイメージをビルドして k3s 上の SSH Pod で `gpu-dev` を叩く。
-- リリースは `ssh_container/pyproject.toml` の `version` を上げて `v0.x.y` というコミットメッセージ 1 本、が慣例。
+- リリースは `packages/kube_lab/pyproject.toml` の `version` を上げて `v0.x.y` というコミットメッセージ 1 本、が慣例。
 
 ## SSH イメージ
 
@@ -54,7 +55,7 @@ final は debian:bookworm-slim + openssh-server + `kubectl`（**バージョン�
 - `.bashrc` に `KUBECONFIG` / `K8S_NAMESPACE` の export、`alias k=`、`/opt/venv/bin` の PATH を追記
 - sshd は毎回 `sshd_config` を書き換えて公開鍵のみ・root 禁止・`AllowUsers $SSH_USER` に固める
 
-## gpu-dev（`ssh_container/src/ssh_tool/`）
+## gpu-dev（`packages/kube_lab/src/ssh_tool/`）
 
 エントリポイントは `gpu-dev` → `ssh_tool.gpu_dev:main`。依存は PyYAML のみ（`--file` のときだけ遅延 import）。
 

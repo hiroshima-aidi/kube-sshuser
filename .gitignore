@@ -33,3 +33,6 @@ htmlcov/
 # Generated tool output
 out/
 output/
+
+# Local registry credentials (see .env.example)
+.env
