@@ -1,23 +1,25 @@
 import textwrap
 
-from .gpu_dev_defaults import DEFAULT_CPU_LIMIT
-from .gpu_dev_defaults import DEFAULT_CPU_REQUEST
-from .gpu_dev_defaults import DEFAULT_GPU
-from .gpu_dev_defaults import DEFAULT_IMAGE
-from .gpu_dev_defaults import DEFAULT_MEMORY_LIMIT
-from .gpu_dev_defaults import DEFAULT_MEMORY_REQUEST
-from .gpu_dev_defaults import DEFAULT_MOUNT_PATH
-from .gpu_dev_defaults import DEFAULT_NODE_LABEL_KEY
-from .gpu_dev_defaults import DEFAULT_NODE_LABEL_VALUE
-from .gpu_dev_defaults import DEFAULT_PULL
-from .gpu_dev_defaults import DEFAULT_PVC
-from .gpu_dev_defaults import DEFAULT_RUNTIME_CLASS
-from .gpu_dev_defaults import DEFAULT_TTL
-from .gpu_dev_identity import sanitize_k8s_name
-from .gpu_dev_k8s import get_pod_phase
-from .gpu_dev_k8s import kubectl_apply
-from .gpu_dev_k8s import pod_exists
-from .gpu_dev_k8s import run
+from .lab_defaults import DEFAULT_CPU_LIMIT
+from .lab_defaults import DEFAULT_CPU_REQUEST
+from .lab_defaults import DEFAULT_GPU
+from .lab_defaults import DEFAULT_IMAGE
+from .lab_defaults import DEFAULT_MEMORY_LIMIT
+from .lab_defaults import DEFAULT_MEMORY_REQUEST
+from .lab_defaults import DEFAULT_MOUNT_PATH
+from .lab_defaults import DEFAULT_NODE_LABEL_KEY
+from .lab_defaults import DEFAULT_NODE_LABEL_VALUE
+from .lab_defaults import DEFAULT_PULL
+from .lab_defaults import DEFAULT_PVC
+from .lab_defaults import DEFAULT_RUNTIME_CLASS
+from .lab_defaults import DEFAULT_TTL
+from .lab_identity import sanitize_k8s_name
+from .lab_k8s import get_pod_phase
+from .lab_k8s import kubectl_apply
+from .lab_k8s import pod_exists
+from .lab_k8s import run
+from .naming import PROG
+from .naming import TAG
 
 
 def has_non_default_create_flags(args) -> bool:
@@ -111,29 +113,29 @@ def build_pod_manifest(args, pod_name: str, owner: str) -> str:
 
 def ensure_pod(namespace: str, pod_name: str, owner: str, args, env=None) -> bool:
     if pod_exists(namespace, pod_name, env=env):
-        print(f"[gpu-dev] found existing pod: {pod_name}")
+        print(f"{TAG} found existing pod: {pod_name}")
 
         phase = get_pod_phase(namespace, pod_name, env=env)
         if phase and phase != "Running":
-            print(f"[gpu-dev] warning: pod phase is {phase}")
+            print(f"{TAG} warning: pod phase is {phase}")
 
         if args.pull != DEFAULT_PULL:
-            down_cmd = "gpu-dev down"
-            up_cmd = f"gpu-dev up --pull {args.pull.lower()}"
+            down_cmd = f"{PROG} down"
+            up_cmd = f"{PROG} up --pull {args.pull.lower()}"
             if args.name:
                 down_cmd = f"{down_cmd} --name {args.name}"
                 up_cmd = f"{up_cmd} --name {args.name}"
             print(
-                "[gpu-dev] warning: --pull has no effect when reusing an existing pod. "
+                f"{TAG} warning: --pull has no effect when reusing an existing pod. "
                 f"Run `{down_cmd}` and then `{up_cmd}`."
             )
 
         if has_non_default_create_flags(args):
-            print("[gpu-dev] existing pod found; create-time resource flags are ignored")
+            print(f"{TAG} existing pod found; create-time resource flags are ignored")
         return False
 
-    print(f"[gpu-dev] pod not found: {pod_name}")
-    print(f"[gpu-dev] creating new pod: {pod_name}")
+    print(f"{TAG} pod not found: {pod_name}")
+    print(f"{TAG} creating new pod: {pod_name}")
     manifest = build_pod_manifest(args, pod_name, owner)
     kubectl_apply(namespace, manifest, env=env)
 

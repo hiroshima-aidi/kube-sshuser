@@ -1,6 +1,8 @@
 import subprocess
 from typing import Optional
 
+from .naming import TAG
+
 
 def run(cmd, env=None, check=True):
     print(f"[cmd] {' '.join(cmd)}")
@@ -131,11 +133,11 @@ def start_port_forward(namespace: str, pod_name: str, forwards: list[str], env=N
     can_forward = can_create_pod_portforward(namespace, env=env)
     if can_forward is False:
         print(
-            "[gpu-dev] warning: skip port-forward because this ServiceAccount "
+            f"{TAG} warning: skip port-forward because this ServiceAccount "
             "cannot create pods/portforward"
         )
         print(
-            "[gpu-dev] hint: add RBAC permission: apiGroups=[''], "
+            f"{TAG} hint: add RBAC permission: apiGroups=[''], "
             "resources=['pods/portforward'], verbs=['create']"
         )
         return None
@@ -155,7 +157,7 @@ def start_port_forward(namespace: str, pod_name: str, forwards: list[str], env=N
 def stop_process(proc: Optional[subprocess.Popen], name: str):
     if not proc:
         return
-    print(f"[gpu-dev] stopping {name}...")
+    print(f"{TAG} stopping {name}...")
     proc.terminate()
     try:
         proc.wait(timeout=5)

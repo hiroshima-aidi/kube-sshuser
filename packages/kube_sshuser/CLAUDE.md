@@ -8,11 +8,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 **このツールの担当範囲は「入れ物」まで。** 隣接リポジトリとの境界を取り違えないこと:
 
-- `docker-ssh` — SSH コンテナイメージと `gpu-dev`（利用者が GPU Pod を起動・停止するツール）。本リポジトリが `--image` に指定するのがこのイメージ
+- `docker-ssh` — SSH コンテナイメージと `kube-lab`（利用者が GPU Pod を起動・停止するツール）。本リポジトリが `--image` に指定するのがこのイメージ
 - `kube-jupyterhub` — JupyterHub 管理 CLI。**JupyterLab/JupyterHub は本リポジトリの対象外**
 - `jupyter-gpu` — Jupyter イメージのビルド
 
-**PVC は SSH Pod にマウントされない。これは意図的な設計。** RWO の multi-attach を避けるため SSH コンテナは入口に徹し、PVC は利用者が `gpu-dev up` で起動する GPU Pod に `/workspace` としてマウントされる（`gpu_dev_pod.py` が `claimName` を指定する）。manifest の Role が pods の create/delete/exec/portforward を許しているのは、SSH コンテナ内から ServiceAccount で `gpu-dev` を動かすため。「PVC が未使用」と誤読しないこと。
+**PVC は SSH Pod にマウントされない。これは意図的な設計。** RWO の multi-attach を避けるため SSH コンテナは入口に徹し、PVC は利用者が `kube-lab up` で起動する GPU Pod に `/workspace` としてマウントされる（`lab_pod.py` が `claimName` を指定する）。manifest の Role が pods の create/delete/exec/portforward を許しているのは、SSH コンテナ内から ServiceAccount で `kube-lab` を動かすため。「PVC が未使用」と誤読しないこと。
 
 ## Commands
 
@@ -111,7 +111,7 @@ CLI の挙動を変えたら、`docs/RUNBOOK.md` の該当セクションと `sk
 | リポジトリ | remote | パッケージ / エントリポイント | 最終更新 |
 |---|---|---|---|
 | admin-tool（本リポジトリ） | `hiroshima-aidi/kube-sshuser` | `kube_sshuser` / `kube-sshuser` | 2026-08-26 |
-| docker-ssh | `hiroshima-aidi/ssh-for-k8s` | SSH イメージ + `ssh_tool`（`gpu-dev`） | 2026-04-16 |
+| docker-ssh | `hiroshima-aidi/ssh-for-k8s` | SSH イメージ + `kube_lab`（`kube-lab`） | 2026-04-16 |
 | kube-jupyterhub | `hiroshima-aidi/kube-jupyterhub` | `kube_jupyterhub` / `kube-jupyterhub` v0.2.0 | 2026-04-20 |
 | jupyter-gpu | `rellab/jupyter-gpu` | Makefile ベースのイメージビルド | 2026-04-20 |
 
@@ -127,8 +127,8 @@ CLI の挙動を変えたら、`docs/RUNBOOK.md` の該当セクションと `sk
              ↓
 [利用者] ssh -p 31007 taro@<host>          ← SSH イメージは docker-ssh 製
              ↓ SSH コンテナ内で
-         gpu-dev up --gpu 1                 ← PVC を /workspace にマウントした GPU Pod
-         gpu-dev status / down
+         kube-lab up --gpu 1                 ← PVC を /workspace にマウントした GPU Pod
+         kube-lab status / down
 
 [別系統] kube-jupyterhub apply / refresh / list / pvc   ← Helm で JupyterHub を管理
          jupyter-gpu                                     ← Jupyter イメージのビルド
@@ -136,7 +136,7 @@ CLI の挙動を変えたら、`docs/RUNBOOK.md` の該当セクションと `sk
 
 - **kube-sshuser と kube-jupyterhub は別系統。** 同じクラスタを使うのかどうか、
   ユーザ・PVC・クォータを共有するのかは **未確認**。統合を検討する際の最初の確認事項。
-- `gpu-dev` は SSH コンテナ内から ServiceAccount で kubectl 相当の操作をする。
+- `kube-lab` は SSH コンテナ内から ServiceAccount で kubectl 相当の操作をする。
   そのための RBAC を発行しているのが本リポジトリの `provision_manifest.py`。
   **両者は Role の権限セットで密結合している**（pods の create/delete/exec/portforward、
   pvc の get/list）。片方だけ変えると壊れる。
@@ -158,11 +158,11 @@ CLI の挙動を変えたら、`docs/RUNBOOK.md` の該当セクションと `sk
 
 ### 未解決の食い違い
 
-- **`gpu-dev` の sudo 問題は決着済み**（2026-08-26）。`build_summary()` の notes が正しく、
+- **`kube-lab` の sudo 問題は決着済み**（2026-08-26）。`build_summary()` の notes が正しく、
   通常ユーザで実行する。sudo だと `$USER` と `$HOME` が root のものになり、Pod の owner
   ラベルと ServiceAccount の kubeconfig が両方外れる。docker-ssh 側で README の図を直し、
   `warn_if_root()` を追加した。
-- 本リポジトリの `docs/RUNBOOK.md` §1 で利用者に伝える `gpu-dev` の使い方は
+- 本リポジトリの `docs/RUNBOOK.md` §1 で利用者に伝える `kube-lab` の使い方は
   docker-ssh の README から書いた。docker-ssh 側が更新されたら追随が要る
   （**現状この 2 つを同期させる仕組みは無い**）。
 

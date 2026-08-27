@@ -8,30 +8,34 @@ import sys
 import time
 from pathlib import Path
 
-from .gpu_dev_core import DEFAULT_CPU_LIMIT
-from .gpu_dev_core import DEFAULT_CPU_REQUEST
-from .gpu_dev_core import DEFAULT_GPU
-from .gpu_dev_core import DEFAULT_IMAGE
-from .gpu_dev_core import DEFAULT_MEMORY_LIMIT
-from .gpu_dev_core import DEFAULT_MEMORY_REQUEST
-from .gpu_dev_core import DEFAULT_MOUNT_PATH
-from .gpu_dev_core import DEFAULT_NODE_LABEL_KEY
-from .gpu_dev_core import DEFAULT_NODE_LABEL_VALUE
-from .gpu_dev_core import DEFAULT_PULL
-from .gpu_dev_core import DEFAULT_PVC
-from .gpu_dev_core import DEFAULT_RUNTIME_CLASS
-from .gpu_dev_core import DEFAULT_TTL
-from .gpu_dev_core import build_owner
-from .gpu_dev_core import build_pod_name
-from .gpu_dev_core import delete_all_pods
-from .gpu_dev_core import delete_pod
-from .gpu_dev_core import ensure_pod
-from .gpu_dev_core import get_namespace_or_exit
-from .gpu_dev_core import list_pods
-from .gpu_dev_core import run
-from .gpu_dev_core import start_port_forward
-from .gpu_dev_core import stop_process
-from .gpu_dev_core import validate_forwards
+from .lab_core import DEFAULT_CPU_LIMIT
+from .lab_core import DEFAULT_CPU_REQUEST
+from .lab_core import DEFAULT_GPU
+from .lab_core import DEFAULT_IMAGE
+from .lab_core import DEFAULT_MEMORY_LIMIT
+from .lab_core import DEFAULT_MEMORY_REQUEST
+from .lab_core import DEFAULT_MOUNT_PATH
+from .lab_core import DEFAULT_NODE_LABEL_KEY
+from .lab_core import DEFAULT_NODE_LABEL_VALUE
+from .lab_core import DEFAULT_PULL
+from .lab_core import DEFAULT_PVC
+from .lab_core import DEFAULT_RUNTIME_CLASS
+from .lab_core import DEFAULT_TTL
+from .lab_core import build_owner
+from .lab_core import build_pod_name
+from .lab_core import delete_all_pods
+from .lab_core import delete_pod
+from .lab_core import ensure_pod
+from .lab_core import get_namespace_or_exit
+from .lab_core import list_pods
+from .lab_core import run
+from .lab_core import start_port_forward
+from .lab_core import stop_process
+from .lab_core import validate_forwards
+from .naming import CANONICAL_NAME
+from .naming import PROG
+from .naming import TAG
+from .naming import warn_if_legacy_name
 
 
 def _add_name_argument(parser: argparse.ArgumentParser):
@@ -150,14 +154,14 @@ def parse_pull_policy(value: str) -> str:
 
 def parse_node_selector(value: str) -> tuple[str, str]:
     if "=" not in value:
-        raise SystemExit("[gpu-dev] invalid --node-selector value: expected KEY=VALUE")
+        raise SystemExit(f"{TAG} invalid --node-selector value: expected KEY=VALUE")
     key, selector_value = value.split("=", 1)
     key = key.strip()
     selector_value = selector_value.strip()
     if not key:
-        raise SystemExit("[gpu-dev] invalid --node-selector value: key is empty")
+        raise SystemExit(f"{TAG} invalid --node-selector value: key is empty")
     if not selector_value:
-        raise SystemExit("[gpu-dev] invalid --node-selector value: value is empty")
+        raise SystemExit(f"{TAG} invalid --node-selector value: value is empty")
     return key, selector_value
 
 
@@ -169,7 +173,7 @@ def _extract_up_config(data) -> dict:
     if data is None:
         return {}
     if not isinstance(data, dict):
-        raise SystemExit("[gpu-dev] invalid config file: root must be a mapping")
+        raise SystemExit(f"{TAG} invalid config file: root must be a mapping")
     return data
 
 
@@ -189,10 +193,10 @@ def _normalize_env_values(value) -> list[str]:
                 for k, v in item.items():
                     items.append(validate_env_item(f"{k}={v}"))
             else:
-                raise SystemExit("[gpu-dev] invalid env config: list items must be string or mapping")
+                raise SystemExit(f"{TAG} invalid env config: list items must be string or mapping")
         return items
 
-    raise SystemExit("[gpu-dev] invalid env config: must be mapping or list")
+    raise SystemExit(f"{TAG} invalid env config: must be mapping or list")
 
 
 def _normalize_forward_values(value) -> list[str]:
@@ -203,7 +207,7 @@ def _normalize_forward_values(value) -> list[str]:
     elif isinstance(value, str):
         values = [value]
     else:
-        raise SystemExit("[gpu-dev] invalid forward config: must be string or list")
+        raise SystemExit(f"{TAG} invalid forward config: must be string or list")
     return validate_forwards(values)
 
 
@@ -213,13 +217,13 @@ def apply_up_file_config(args):
 
     path = Path(args.file).expanduser()
     if not path.exists():
-        raise SystemExit(f"[gpu-dev] config file not found: {path}")
+        raise SystemExit(f"{TAG} config file not found: {path}")
 
     try:
         yaml = importlib.import_module("yaml")
     except ModuleNotFoundError as exc:
         raise SystemExit(
-            "[gpu-dev] PyYAML is required for --file support. Install dependency: PyYAML"
+            f"{TAG} PyYAML is required for --file support. Install dependency: PyYAML"
         ) from exc
 
     with path.open("r", encoding="utf-8") as f:
@@ -269,7 +273,7 @@ def apply_up_file_config(args):
     for key, value in normalized.items():
         target = aliases.get(key, key)
         if target not in defaults:
-            raise SystemExit(f"[gpu-dev] unsupported key in config: {key}")
+            raise SystemExit(f"{TAG} unsupported key in config: {key}")
 
         current = getattr(args, target)
         if current != defaults[target]:
@@ -295,18 +299,19 @@ def warn_if_root():
     if os.geteuid() != 0:
         return
     print(
-        "[gpu-dev] warning: running as root. gpu-dev is meant to run as the "
+        f"{TAG} warning: running as root. {PROG} is meant to run as the "
         "normal SSH user, not via sudo.",
         file=sys.stderr,
     )
     print(
-        "[gpu-dev] warning: under sudo, $USER and $HOME belong to root, so the "
+        f"{TAG} warning: under sudo, $USER and $HOME belong to root, so the "
         "pod owner label and the ServiceAccount kubeconfig are both wrong.",
         file=sys.stderr,
     )
 
 
 def main():
+    warn_if_legacy_name()
     warn_if_root()
 
     parser = build_parser()
@@ -368,7 +373,7 @@ def main():
         stop_process(pf_proc, "port-forward")
 
         if created and not args.keep:
-            print("[gpu-dev] deleting pod...")
+            print(f"{TAG} deleting pod...")
             delete_pod(namespace, pod_name, env=env)
 
 

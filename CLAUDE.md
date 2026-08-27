@@ -11,12 +11,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ```
 packages/kube_sshuser/     kube-sshuser CLI（管理者）
-packages/kube_lab/         gpu-dev CLI（学生）。中身はまだ src/ssh_tool/ — 改名は Phase 2.5
+packages/kube_lab/         kube-lab CLI（学生）。旧名 gpu-dev は今学期のみ並走
 packages/kube_jupyterhub/  kube-jupyterhub CLI（管理者・別系統）
 images/ssh/                SSH コンテナイメージ（Dockerfile + entrypoint.sh）
 images/jupyter/            Jupyter イメージ（独自 Makefile をルートから委譲）
 docs/RUNBOOK.md            管理者向け運用手順書
-docs/user/kube-lab.md      学生向け gpu-dev の使い方（旧 docker-ssh の README）
+docs/user/kube-lab.md      学生向け kube-lab の使い方（旧 docker-ssh の README）
 skills/kube/               Claude Code 用 Skill
 ```
 
@@ -24,7 +24,7 @@ skills/kube/               Claude Code 用 Skill
 この文書はパッケージ間の関係だけを扱い、個々の作り込みには立ち入らない。
 
 **`packages/kube_lab` が SSH イメージに焼き込まれる**のがモノレポ化の決め手。Dockerfile の
-`COPY packages/ /build/packages/` 1 行で済み、RBAC と gpu-dev の同時変更が 1 つの diff に入る。
+`COPY packages/ /build/packages/` 1 行で済み、RBAC と kube-lab の同時変更が 1 つの diff に入る。
 
 **旧リポジトリ名との対応**（外部の issue や古い URL を扱うとき用）:
 `admin-tool` → `packages/kube_sshuser`、`docker-ssh` → `packages/kube_lab` + `images/ssh`、
@@ -41,7 +41,7 @@ skills/kube/               Claude Code 用 Skill
              ↓
 [利用者] ssh -p 31007 taro@<host>            ← SSH イメージは images/ssh 製
              ↓ SSH コンテナ内で
-         gpu-dev up --gpu 1                  ← PVC を /workspace にマウントした GPU Pod
+         kube-lab up --gpu 1                  ← PVC を /workspace にマウントした GPU Pod
 
 [別系統] kube-jupyterhub apply / refresh / list / pvc
          images/jupyter（Jupyter イメージのビルド）
@@ -82,15 +82,15 @@ make jupyter-help                                # Jupyter 側の全ターゲッ
 
 ## パッケージをまたぐ結合点（変更時に必ず両方を見る）
 
-- **RBAC と `gpu-dev` は密結合。** `kube_sshuser/provision_manifest.py:117-135` の Role を、SSH コンテナ内の
-  `gpu-dev` が ServiceAccount で使う。突き合わせ済みの結果:
-  **`pods/log` / `persistentvolumeclaims` / `events` は gpu-dev が一度も使っていない過剰付与**、
-  逆に `auth can-i`（`kube_lab` の `gpu_dev_k8s.py:100`）が要る `selfsubjectaccessreviews` は Role に無い。
+- **RBAC と `kube-lab` は密結合。** `kube_sshuser/provision_manifest.py:117-135` の Role を、SSH コンテナ内の
+  `kube-lab` が ServiceAccount で使う。突き合わせ済みの結果:
+  **`pods/log` / `persistentvolumeclaims` / `events` は kube-lab が一度も使っていない過剰付与**、
+  逆に `auth can-i`（`kube_lab` の `lab_k8s.py:100`）が要る `selfsubjectaccessreviews` は Role に無い。
 - **PVC は SSH Pod にマウントされない（意図的）。** RWO の multi-attach を避けるため。
-  マウントするのは `gpu-dev up` が起こす GPU Pod 側（`kube_lab` の `gpu_dev_pod.py` が `claimName` を指定）。
+  マウントするのは `kube-lab up` が起こす GPU Pod 側（`kube_lab` の `lab_pod.py` が `claimName` を指定）。
 - **PVC 名 `workspace` が両側の暗黙の契約。** admin 側 3 箇所（`provision_user.py:74`,
-  `doctor.py:115`, `modify_user.py:164`）と `kube_lab` の `gpu_dev_defaults.py:5` に**独立したリテラル**として
-  あり、`--pvc-name` を既定から変えて払い出すと gpu-dev が黙って壊れる。
+  `doctor.py:115`, `modify_user.py:164`）と `kube_lab` の `lab_defaults.py:5` に**独立したリテラル**として
+  あり、`--pvc-name` を既定から変えて払い出すと kube-lab が黙って壊れる。
 - **名前正規化が 3 実装で、規則が実際に食い違う。** 同じ入力を通して確認済み:
 
   | 入力 | `common.normalize_name()` | `sanitize_k8s_name()` | `entrypoint.sh` |
@@ -99,18 +99,18 @@ make jupyter-help                                # Jupyter 側の全ターゲッ
   | `___` | ValueError | `user` | `''` |
   | 70 文字 | **63 に切り詰め** | 切り詰めなし | 切り詰めなし |
 
-  `sanitize_k8s_name()` が `ch.isalnum()` を使う（`kube_lab` の `gpu_dev_identity.py:11`）ため非 ASCII が
-  素通りする。その値はラベル値 `logical-name` にも入るので **`gpu-dev up --name テスト` は
-  apply が失敗する**。63 文字の差は、長いユーザ名で admin と gpu-dev の namespace がずれる。
+  `sanitize_k8s_name()` が `ch.isalnum()` を使う（`kube_lab` の `lab_identity.py:11`）ため非 ASCII が
+  素通りする。その値はラベル値 `logical-name` にも入るので **`kube-lab up --name テスト` は
+  apply が失敗する**。63 文字の差は、長いユーザ名で admin と kube-lab の namespace がずれる。
 - **kubectl ラッパが 6 実装 + 素の `subprocess.run` が 5 箇所。** `kubectl_get_json()` は同名で
   3 つあり、**`common.py:112` は失敗時 `None`、`status.py:25` は `RuntimeError` と挙動が逆**
   （`terminate_pod.py:20` はその丸写し）。`--context` は Phase 1 で `kube_jupyterhub` にも入り、残るは `kube_lab`。
 - **イメージの受け渡し。** `kube-sshuser create --image` に渡すのが `images/ssh` がビルド・push するイメージ
   （`ghcr.io/hiroshima-aidi/ssh-for-k8s`）。
-- **ドキュメントの同期は手動。** `docs/RUNBOOK.md` §1 の `gpu-dev` の説明は
+- **ドキュメントの同期は手動。** `docs/RUNBOOK.md` §1 の `kube-lab` の説明は
   `docs/user/kube-lab.md`（旧 docker-ssh README）から書き写したもの。追随させる仕組みは無い。
   **モノレポになったので、今は同じ diff で直せる。**
-- **`gpu-dev` は sudo ではなく通常ユーザで実行する**（決着済み）。owner を `$USER` から取り、
+- **`kube-lab` は sudo ではなく通常ユーザで実行する**（決着済み）。owner を `$USER` から取り、
   kubeconfig が SSH ユーザの `$HOME` にあるため、sudo だと両方外れる。`docs/user/kube-lab.md` の図を直し、`warn_if_root()` を追加済み。
 
 ## 統合リファクタリング（進行中）
@@ -118,7 +118,7 @@ make jupyter-help                                # Jupyter 側の全ターゲッ
 **承認済みの計画**: `~/.claude/plans/playful-enchanting-prism.md`。着手前に必ず読むこと。
 
 方針は **モノレポ化 + 共通コア `kubelab_core` の切り出し**を Phase 0〜6 で段階実行。
-決め手は、`gpu-dev` が SSH イメージに焼き込まれる点 — 別リポジトリのままだと Dockerfile が
+決め手は、`kube-lab` が SSH イメージに焼き込まれる点 — 別リポジトリのままだと Dockerfile が
 「GitHub から pip install」か vendoring になり、ビルドの再現性と RBAC の同時変更レビューが
 両方壊れる。同一リポジトリなら `COPY packages/ /build/packages/` の 1 行で済む。
 
@@ -126,7 +126,7 @@ make jupyter-help                                # Jupyter 側の全ターゲッ
 
 - **リポジトリは `hiroshima-aidi/kube-sshuser` を rename して `kube-tools`**（新規作成しない。
   GitHub の rename リダイレクトで既存の pip URL が生きる）
-- **学生向け CLI `gpu-dev` は `kube-lab` に改名**（Phase 2.5。旧名をエイリアスで 1 学期並走）
+- **学生向け CLI `gpu-dev` は `kube-lab` に改名**（Phase 2.5 で実施済み。旧名をエイリアスで 1 学期並走）
 - **リポジトリ名と CLI 名は分ける** — 両方 `kube-lab` だと repo と CLI が区別できない
 - `jupyter-gpu`（remote が `rellab`）も取り込む
 - RBAC の過剰付与（`pods/log` / `pvc` / `events`）は削る
@@ -290,3 +290,41 @@ make jupyter-help                                # Jupyter 側の全ターゲッ
   エイリアス並走をここで入れる。
 - ワークスペース `~/Documents/kube` にはまだ旧 4 ディレクトリが残っている。
   `admin-tool/` が新しい `kube-tools` リポジトリ本体。他 3 つは統合済みなので整理して良い。
+
+### 2026-08-27（Phase 2.5）
+
+**Phase 2.5（`gpu-dev` → `kube-lab` 改名）完了。** クラスタ操作なし。
+
+- モジュール `ssh_tool` → `kube_lab`、ファイル `gpu_dev*.py` → `lab_*.py`、
+  配布名 `ssh-tool` → `kube-lab`（v0.3.0）
+- `[project.scripts]` に **`kube-lab` と `gpu-dev` の両方**を同じ `main()` で登録。
+  `gpu-dev` で起動したときだけ stderr に改名を知らせる 1 行が出る。**1 学期並走後に削除。**
+- 新設 `naming.py` が `PROG` / `TAG` を持ち、**メッセージ prefix と提案コマンドが起動名に追随**する。
+  `gpu-dev` で起動した人に `kube-lab down` を勧めると手元のメモに無いコマンドを案内することになるため。
+
+**合否判定（すべてクリア）:**
+
+- `build_pod_manifest()` の出力が 6 ケースで**バイト一致**（ラベルを触っていないので当然そうなるべき）
+- イメージ内で `kube-lab --help` と `gpu-dev --help` が**一致**（差は usage 行の prog 名と、
+  prog が 1 文字短いことによる argparse の折り返しインデントのみ）
+- `gpu-dev` 起動時のみ改名通知が出て、`kube-lab` では出ないことを実イメージで確認
+
+**変えていないもの（意図的）**
+
+- **ラベル `app: gpu-dev` / アノテーション `gpu-dev/*`。** 稼働中の Pod が持っており、
+  `down --all` と `status` のセレクタ（`lab_k8s.py:80`, `lab_listing.py:142`）が依存している。Phase 6。
+- **`--help` の「gpu-dev pod」という語。** Pod のラベルが実際に `app=gpu-dev` である以上、
+  ここを `kube-lab pod` にすると `kubectl get pods -l ...` を打つ人に嘘を教えることになる。
+  ラベル移行（Phase 6）と同時に直す。
+
+**ついでに直したもの**
+
+- `packages/kube_lab/src/ssh_tool/__pycache__/*.pyc` が**追跡されたまま**だった
+  （旧 ssh-for-k8s の `.gitignore` に `__pycache__` が無く、Phase 2 でそのまま持ち込んでいた）。
+  `git rm --cached` で外した。ルートの `.gitignore` には元から入っている。
+
+**次にやること**
+
+- **Phase 3（共通コア `kubelab_core` の抽出）**。ここから**実クラスタ検証が要る**。
+  Phase 0-4 の実測（既存 namespace 名の最大長 10 文字）より、名前正規化の統一は無害と確定済み。
+  Phase 1 の訂正により、`kubectl_get_json` の `--context` に関する検証項目は不要。

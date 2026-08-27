@@ -9,7 +9,7 @@
 
 **ここに書いてあるのは管理者の作業だけです。** kube-sshuser が作るのは「入れ物」まで
 （namespace / PVC / クォータ / SSH の入口）で、その中で GPU Pod を動かすのは利用者側の
-`gpu-dev`（別リポジトリ docker-ssh）の担当です。
+`kube-lab`（`packages/kube_lab`、旧名 `gpu-dev`）の担当です。
 
 ```
 [管理者]  kube-sshuser create taro ...
@@ -18,14 +18,14 @@
               ↓
 [利用者]  ssh -p 31007 taro@<host>
               ↓ SSH コンテナの中で
-          gpu-dev up --gpu 1        ← GPU Pod を起動（PVC を /workspace にマウント）
-          gpu-dev status / down
+          kube-lab up --gpu 1       ← GPU Pod を起動（PVC を /workspace にマウント）
+          kube-lab status / down
 ```
 
 | やりたいこと | 担当 | 参照先 |
 |---|---|---|
 | 環境の払い出し・変更・削除、稼働状況の確認 | **kube-sshuser（この手順書）** | 以下 |
-| GPU Pod の起動・停止、TTL や GPU 数の指定 | 利用者の `gpu-dev` | docker-ssh の README |
+| GPU Pod の起動・停止、TTL や GPU 数の指定 | 利用者の `kube-lab` | `docs/user/kube-lab.md` |
 | SSH コンテナイメージの更新 | docker-ssh | 同上 |
 | JupyterLab / JupyterHub のデプロイ | **kube-jupyterhub（別ツール）** | kube-jupyterhub の README |
 | Jupyter イメージのビルド | jupyter-gpu | jupyter-gpu の README |
@@ -107,7 +107,7 @@ vi /srv/kube-sshuser/keys/taro.pub   # 受け取った 1 行を貼る
 |---|---|---|---|
 | 表示名 | `--name` | なし | 実名。後から `modify` で変更可 |
 | 説明 | `--desc` | なし | 「M1 / 〇〇研究」など。棚卸しで効く |
-| ストレージ | `--storage` | `100Gi` | `gpu-dev` の Pod に `/workspace` としてマウントされる |
+| ストレージ | `--storage` | `100Gi` | `kube-lab` の Pod に `/workspace` としてマウントされる |
 | GPU | `--gpu-quota` | `1` | 同時に確保できる GPU 数 |
 | CPU | `--cpu-quota` | `16` | namespace 全体の上限 |
 | メモリ | `--memory-quota` | `64Gi` | namespace 全体の上限 |
@@ -150,17 +150,23 @@ ssh -p 31007 taro@10.0.0.12
 
 ログインユーザ名は kube-sshuser に渡したユーザ名と同じです。
 
-ログイン後の GPU の使い方は `gpu-dev`（docker-ssh）の担当です。あわせて伝えます。
+ログイン後の GPU の使い方は `kube-lab` の担当です。あわせて伝えます。
 
 ```bash
-gpu-dev up --gpu 1        # GPU Pod を起動して入る
-gpu-dev status            # 自分の Pod 一覧
-gpu-dev down              # 片付け
+kube-lab up --gpu 1       # GPU Pod を起動して入る
+kube-lab status           # 自分の Pod 一覧
+kube-lab down             # 片付け
 ```
 
 - 作業データは `/workspace`（PVC）に置く。それ以外は Pod と一緒に消える
 - 既定の TTL は 3600 秒。長く使うなら `--ttl` を指定する
-- 詳細なオプションは docker-ssh の README を見るよう案内する
+- 詳細なオプションは `docs/user/kube-lab.md` を見るよう案内する
+
+**このコマンドは `gpu-dev` から `kube-lab` に改名しました（2026-08-27、v0.3.0）。**
+`gpu-dev` も**今学期いっぱいは同じように動きます**（実行すると改名を知らせる 1 行が出ます）。
+学期末に `gpu-dev` を削除する予定なので、新しく案内するときは `kube-lab` を使ってください。
+**Pod のラベル `app=gpu-dev` とアノテーション `gpu-dev/*` は変えていません** — 稼働中の Pod が
+持っており、`down --all` のセレクタが依存しているためです（置換は Phase 6）。
 
 ### 注意点
 
@@ -171,7 +177,7 @@ gpu-dev down              # 片付け
   （他人の環境を上書きしないための保護）。意図的な上書きは `--force`。
 - **PVC は SSH Pod にはマウントされません（意図的な設計です）。**
   RWO の multi-attach を避けるため、SSH コンテナは入口に徹しています。
-  PVC は利用者が `gpu-dev up` で起動する GPU Pod に `/workspace` として
+  PVC は利用者が `kube-lab up` で起動する GPU Pod に `/workspace` として
   マウントされます。学生には次の 2 点を伝えてください。
   - 永続させたいデータは `/workspace` に置く
   - SSH コンテナ内のホームディレクトリは Pod の再作成で消える
@@ -423,9 +429,9 @@ kubectl -n ns-taro describe pod <pod名> | tail -20
 | `ImagePullBackOff` | イメージ名かレジストリ認証 | `--image` を確認、`--pull always` を再指定 |
 | `exceeded quota` | クォータ超過 | `modify --cpu-quota` などで拡張 |
 
-### 7.3 学生が「Pod が作れない」「gpu-dev が失敗する」と言ってくる
+### 7.3 学生が「Pod が作れない」「kube-lab が失敗する」と言ってくる
 
-まず **どちら側の問題か** を切り分けます。`gpu-dev` 自体の使い方の問題なら docker-ssh の
+まず **どちら側の問題か** を切り分けます。`kube-lab` 自体の使い方の問題なら `docs/user/kube-lab.md` の
 担当ですが、次のエラーは管理者側（クォータ・ラベル）の問題です。
 
 エラーが `must specify limits.cpu` / `must specify requests.memory` の場合、
@@ -631,4 +637,13 @@ kube-sshuser delete <user>
 kube-sshuser doctor
 kube-sshuser list --status active
 cat $KUBE_SSHUSER_OUT_DIR/_registry/events.ndjson | tail
+```
+
+学生に案内する側（SSH コンテナの中で打つコマンド。`gpu-dev` は旧名で今学期のみ並走）:
+
+```bash
+kube-lab up --gpu 1       # GPU Pod を起動して入る
+kube-lab status           # 自分の Pod 一覧
+kube-lab down             # 片付け
+kube-lab down --all       # 自分の Pod を全部消す
 ```

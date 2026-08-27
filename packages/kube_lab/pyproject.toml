@@ -3,16 +3,19 @@ requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "ssh-tool"
-version = "0.2.2"
-description = "User-side tools for GPU dev pods and jobs"
+name = "kube-lab"
+version = "0.3.0"
+description = "User-side CLI for running your own dev pods on the lab Kubernetes cluster"
 requires-python = ">=3.9"
 dependencies = [
 	"PyYAML>=6.0",
 ]
 
 [project.scripts]
-gpu-dev = "ssh_tool.gpu_dev:main"
+kube-lab = "kube_lab.lab_cli:main"
+# Renamed from gpu-dev in 0.3.0. Both names run the same main(); invoking the old
+# one prints a one-line notice. Remove after one semester of overlap.
+gpu-dev = "kube_lab.lab_cli:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}

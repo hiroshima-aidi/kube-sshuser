@@ -8,16 +8,16 @@
 | 場所 | 中身 | 主な利用者 |
 |---|---|---|
 | `packages/kube_sshuser/` | `kube-sshuser` CLI。ユーザ環境（namespace・PVC・クォータ・SSH 入口）の払い出し | 管理者 |
-| `packages/kube_lab/` | `gpu-dev` CLI。PVC をマウントした GPU Pod の起動・停止 | 利用者（学生） |
+| `packages/kube_lab/` | `kube-lab` CLI。PVC をマウントした GPU Pod の起動・停止 | 利用者（学生） |
 | `packages/kube_jupyterhub/` | `kube-jupyterhub` CLI。Helm で JupyterHub を管理 | 管理者（別系統） |
-| `images/ssh/` | SSH コンテナイメージ（`gpu-dev` を焼き込む） | 管理者 |
+| `images/ssh/` | SSH コンテナイメージ（`kube-lab` を焼き込む） | 管理者 |
 | `images/jupyter/` | Jupyter イメージのビルド | 管理者（別系統） |
 | `docs/RUNBOOK.md` | 管理者向け運用手順書 | 管理者 |
-| `docs/user/kube-lab.md` | 学生向けの `gpu-dev` の使い方 | 利用者（学生） |
+| `docs/user/kube-lab.md` | 学生向けの `kube-lab` の使い方 | 利用者（学生） |
 
 **`packages/kube_lab` が SSH イメージに焼き込まれる**のが、これらを 1 つのリポジトリに置く理由です。
 別リポジトリだと Dockerfile が「GitHub から pip install」か vendoring になり、ビルドの再現性と、
-RBAC（`kube_sshuser` 側）と `gpu-dev` の同時変更のレビューが両方壊れます。
+RBAC（`kube_sshuser` 側）と `kube-lab` の同時変更のレビューが両方壊れます。
 
 ## 全体の流れ
 
@@ -28,7 +28,7 @@ RBAC（`kube_sshuser` 側）と `gpu-dev` の同時変更のレビューが両�
              ↓
 [利用者] ssh -p 31007 taro@<host>
              ↓ SSH コンテナ内で
-         gpu-dev up --gpu 1        ← PVC を /workspace にマウントした GPU Pod
+         kube-lab up --gpu 1        ← PVC を /workspace にマウントした GPU Pod
 ```
 
 JupyterHub 系（`kube_jupyterhub` / `images/jupyter`）は SSH 系とは**別系統**です。

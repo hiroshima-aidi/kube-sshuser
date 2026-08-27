@@ -16,9 +16,9 @@ description: 研究室 Kubernetes クラスタの学生 SSH 環境を kube-sshus
 |---|---|---|
 | 環境を払い出す・消す・クォータを変える | kube-sshuser（このスキル） | 対応する |
 | 稼働状況・GPU の使用状況を見る | kube-sshuser（このスキル） | 対応する |
-| GPU Pod の起動・停止（`gpu-dev up` / `down`） | docker-ssh リポジトリ | **本ツールの対象外**。`gpu-dev` の使い方として案内する |
+| GPU Pod の起動・停止（`kube-lab up` / `down`） | `packages/kube_lab` | **本ツールの対象外**。`kube-lab`（旧名 `gpu-dev`、今学期のみ並走）の使い方として案内する |
 | JupyterLab / JupyterHub のデプロイ | kube-jupyterhub リポジトリ | **本ツールの対象外**。別ツールであることを伝える |
-| コンテナイメージのビルド | docker-ssh / jupyter-gpu | **本ツールの対象外** |
+| コンテナイメージのビルド | `images/ssh` / `images/jupyter` | **本ツールの対象外** |
 
 対象外の依頼を kube-sshuser で無理に実現しようとしないこと。どのツールの担当かを伝える。
 
@@ -127,7 +127,7 @@ Claude が実行する場合、CLI の入力確認を `--yes` で飛ばすこと
 
 ## 既知の制約（学生に説明が必要になる）
 
-- **workspace PVC は SSH Pod にはマウントされない（意図的）。** 利用者が `gpu-dev up` で
+- **workspace PVC は SSH Pod にはマウントされない（意図的）。** 利用者が `kube-lab up` で
   起動する GPU Pod に `/workspace` としてマウントされる。SSH コンテナ内のホームは
   Pod 再作成で消えるので、永続データは `/workspace` に置くよう伝える
 - ResourceQuota が limits を hard 指定しているため、学生の Pod は requests / limits の
