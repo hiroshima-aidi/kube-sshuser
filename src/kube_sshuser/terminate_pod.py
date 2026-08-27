@@ -7,34 +7,15 @@ import sys
 from kube_sshuser.common import (
     add_context_argument,
     cli_main,
+    confirm_or_exit,
     current_context,
+    kubectl_get_json_or_raise as kubectl_get_json,
     run,
     set_kube_context,
 )
+from kube_sshuser.labels import MANAGED_BY_KEY, MANAGED_BY_VALUE
 
 
-MANAGED_NAMESPACE_LABEL_KEY = "app.kubernetes.io/managed-by"
-MANAGED_NAMESPACE_LABEL_VALUE = "provision-user"
-
-
-def kubectl_get_json(cmd):
-    result = run(cmd, check=False)
-    if result.returncode != 0:
-        message = result.stderr.strip() or result.stdout.strip() or "kubectl command failed"
-        raise RuntimeError(message)
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("failed to decode kubectl JSON output") from exc
-
-
-def confirm_or_exit(message, assume_yes):
-    if assume_yes:
-        return
-    reply = input(f"{message} [y/N]: ").strip().lower()
-    if reply not in {"y", "yes"}:
-        print("aborted", file=sys.stderr)
-        raise SystemExit(1)
 
 
 def get_namespace(namespace):
@@ -48,7 +29,7 @@ def get_namespace_pods(namespace):
 
 def is_managed_namespace(namespace_obj):
     labels = namespace_obj.get("metadata", {}).get("labels") or {}
-    return labels.get(MANAGED_NAMESPACE_LABEL_KEY) == MANAGED_NAMESPACE_LABEL_VALUE
+    return labels.get(MANAGED_BY_KEY) == MANAGED_BY_VALUE
 
 
 def describe_owner_references(pod):
@@ -134,7 +115,7 @@ def main(argv=None):
     namespace_obj = get_namespace(args.namespace)
     if not is_managed_namespace(namespace_obj):
         print(
-            f"namespace is not managed by {MANAGED_NAMESPACE_LABEL_VALUE}: {args.namespace}",
+            f"namespace is not managed by {MANAGED_BY_VALUE}: {args.namespace}",
             file=sys.stderr,
         )
         raise SystemExit(1)

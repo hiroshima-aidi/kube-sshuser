@@ -3,6 +3,16 @@
 import argparse
 import json
 
+from kube_sshuser.labels import (
+    APP_NAME_KEY,
+    DESCRIPTION_ANNOTATION,
+    DISPLAY_NAME_ANNOTATION,
+    MANAGED_BY_KEY,
+    MANAGED_BY_VALUE,
+    SSH_APP_NAME_VALUE,
+    USER_LABEL_KEY,
+)
+
 
 def parse_image_pull_policy(value: str) -> str:
     normalized = value.strip().lower().replace("_", "-")
@@ -24,14 +34,14 @@ def build_annotations_block(display_name, description, indent: str) -> str:
     if display_name:
         annotations.append(
             (
-                "provision-user.openai.local/display-name",
+                DISPLAY_NAME_ANNOTATION,
                 json.dumps(display_name, ensure_ascii=False),
             )
         )
     if description:
         annotations.append(
             (
-                "provision-user.openai.local/description",
+                DESCRIPTION_ANNOTATION,
                 json.dumps(description, ensure_ascii=False),
             )
         )
@@ -54,8 +64,8 @@ metadata:
   name: quota
   namespace: {args.namespace}
   labels:
-    app.kubernetes.io/managed-by: provision-user
-    provision-user.openai.local/user: {args.username}
+    {MANAGED_BY_KEY}: {MANAGED_BY_VALUE}
+    {USER_LABEL_KEY}: {args.username}
 spec:
   hard:
     requests.cpu: \"{args.cpu_quota}\"
@@ -77,8 +87,8 @@ kind: Namespace
 metadata:
   name: {args.namespace}
   labels:
-    app.kubernetes.io/managed-by: provision-user
-    provision-user.openai.local/user: {args.username}
+    {MANAGED_BY_KEY}: {MANAGED_BY_VALUE}
+    {USER_LABEL_KEY}: {args.username}
 {namespace_annotations}
 ---
 apiVersion: v1
@@ -87,8 +97,8 @@ metadata:
   name: {args.pvc_name}
   namespace: {args.namespace}
   labels:
-    app.kubernetes.io/managed-by: provision-user
-    provision-user.openai.local/user: {args.username}
+    {MANAGED_BY_KEY}: {MANAGED_BY_VALUE}
+    {USER_LABEL_KEY}: {args.username}
 spec:
   accessModes:
     - ReadWriteOnce
@@ -102,8 +112,8 @@ metadata:
   name: {args.service_account_name}
   namespace: {args.namespace}
   labels:
-    app.kubernetes.io/managed-by: provision-user
-    provision-user.openai.local/user: {args.username}
+    {MANAGED_BY_KEY}: {MANAGED_BY_VALUE}
+    {USER_LABEL_KEY}: {args.username}
 automountServiceAccountToken: true
 ---
 apiVersion: rbac.authorization.k8s.io/v1
@@ -112,8 +122,8 @@ metadata:
   name: {args.role_name}
   namespace: {args.namespace}
   labels:
-    app.kubernetes.io/managed-by: provision-user
-    provision-user.openai.local/user: {args.username}
+    {MANAGED_BY_KEY}: {MANAGED_BY_VALUE}
+    {USER_LABEL_KEY}: {args.username}
 rules:
   - apiGroups: [\"\"]
     resources: [\"pods\"]
@@ -140,8 +150,8 @@ metadata:
   name: {args.role_binding_name}
   namespace: {args.namespace}
   labels:
-    app.kubernetes.io/managed-by: provision-user
-    provision-user.openai.local/user: {args.username}
+    {MANAGED_BY_KEY}: {MANAGED_BY_VALUE}
+    {USER_LABEL_KEY}: {args.username}
 subjects:
   - kind: ServiceAccount
     name: {args.service_account_name}
@@ -157,24 +167,24 @@ metadata:
   name: {args.deployment_name}
   namespace: {args.namespace}
   labels:
-    app.kubernetes.io/name: ssh-user
-    app.kubernetes.io/managed-by: provision-user
-    provision-user.openai.local/user: {args.username}
+    {APP_NAME_KEY}: {SSH_APP_NAME_VALUE}
+    {MANAGED_BY_KEY}: {MANAGED_BY_VALUE}
+    {USER_LABEL_KEY}: {args.username}
 {namespace_annotations}
 spec:
   replicas: 1
   selector:
     matchLabels:
-      app.kubernetes.io/name: ssh-user
-      provision-user.openai.local/user: {args.username}
+      {APP_NAME_KEY}: {SSH_APP_NAME_VALUE}
+      {USER_LABEL_KEY}: {args.username}
   strategy:
     type: Recreate
   template:
     metadata:
       labels:
-        app.kubernetes.io/name: ssh-user
-        app.kubernetes.io/managed-by: provision-user
-        provision-user.openai.local/user: {args.username}
+        {APP_NAME_KEY}: {SSH_APP_NAME_VALUE}
+        {MANAGED_BY_KEY}: {MANAGED_BY_VALUE}
+        {USER_LABEL_KEY}: {args.username}
 {pod_annotations}
     spec:
       serviceAccountName: {args.service_account_name}
@@ -231,13 +241,13 @@ metadata:
   name: {args.service_name}
   namespace: {args.namespace}
   labels:
-    app.kubernetes.io/managed-by: provision-user
-    provision-user.openai.local/user: {args.username}
+    {MANAGED_BY_KEY}: {MANAGED_BY_VALUE}
+    {USER_LABEL_KEY}: {args.username}
 spec:
   type: NodePort
   selector:
-    app.kubernetes.io/name: ssh-user
-    provision-user.openai.local/user: {args.username}
+    {APP_NAME_KEY}: {SSH_APP_NAME_VALUE}
+    {USER_LABEL_KEY}: {args.username}
   ports:
     - name: ssh
       port: 22

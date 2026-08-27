@@ -15,6 +15,7 @@ from kube_sshuser.common import (
     run,
     set_kube_context,
 )
+from kube_sshuser.labels import DESCRIPTION_ANNOTATION, DISPLAY_NAME_ANNOTATION
 from kube_sshuser.registry import (
     append_event,
     build_operation_id,
@@ -23,8 +24,6 @@ from kube_sshuser.registry import (
     utcnow_iso,
 )
 
-ANNOTATION_NAME = "provision-user.openai.local/display-name"
-ANNOTATION_DESC = "provision-user.openai.local/description"
 
 
 def parse_args(argv=None):
@@ -130,11 +129,11 @@ def main(argv=None):
     profile_update = {}
 
     if args.display_name is not None:
-        annotations[ANNOTATION_NAME] = display_name if display_name is not None else ""
+        annotations[DISPLAY_NAME_ANNOTATION] = display_name if display_name is not None else ""
         profile_update["name"] = display_name
 
     if args.description is not None:
-        annotations[ANNOTATION_DESC] = description if description is not None else ""
+        annotations[DESCRIPTION_ANNOTATION] = description if description is not None else ""
         profile_update["description"] = description
 
     if annotations:

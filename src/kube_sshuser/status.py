@@ -10,27 +10,19 @@ from kube_sshuser.common import (
     cli_main,
     default_out_dir,
     humanize_age,
+    kubectl_get_json_or_raise as kubectl_get_json,
     parse_k8s_timestamp,
     run,
     set_kube_context,
 )
+from kube_sshuser.labels import (
+    DESCRIPTION_ANNOTATION,
+    DISPLAY_NAME_ANNOTATION,
+    MANAGED_NAMESPACE_SELECTOR,
+)
 from kube_sshuser.registry import list_user_records
 
 
-MANAGED_NAMESPACE_LABEL = "app.kubernetes.io/managed-by=provision-user"
-DISPLAY_NAME_ANNOTATION = "provision-user.openai.local/display-name"
-DESCRIPTION_ANNOTATION = "provision-user.openai.local/description"
-
-
-def kubectl_get_json(cmd):
-    result = run(cmd, check=False)
-    if result.returncode != 0:
-        message = result.stderr.strip() or result.stdout.strip() or "kubectl command failed"
-        raise RuntimeError(message)
-    try:
-        return json.loads(result.stdout)
-    except json.JSONDecodeError as exc:
-        raise RuntimeError("failed to decode kubectl JSON output") from exc
 
 
 def normalize_cpu_value(cpu_str):
@@ -221,7 +213,7 @@ def collect_status_groups(out_dir=None):
             "get",
             "namespaces",
             "-l",
-            MANAGED_NAMESPACE_LABEL,
+            MANAGED_NAMESPACE_SELECTOR,
             "-o",
             "json",
         ]

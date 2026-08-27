@@ -21,10 +21,10 @@ from kube_sshuser.common import (
     report_out_dir,
     set_kube_context,
 )
+from kube_sshuser.labels import MANAGED_NAMESPACE_SELECTOR
 from kube_sshuser.provision_kubectl import collect_observed_namespace_spec
 from kube_sshuser.registry import list_user_records
 
-MANAGED_NAMESPACE_LABEL = "app.kubernetes.io/managed-by=provision-user"
 
 # verdicts, worst first
 MISSING = "missing-in-cluster"
@@ -38,7 +38,7 @@ SEVERITY = {MISSING: 0, ORPHAN: 1, UNTRACKED: 2, DRIFT: 3, OK: 4}
 
 def managed_namespaces():
     data = kubectl_get_json(
-        ["kubectl", "get", "namespace", "-l", MANAGED_NAMESPACE_LABEL, "-o", "json"]
+        ["kubectl", "get", "namespace", "-l", MANAGED_NAMESPACE_SELECTOR, "-o", "json"]
     )
     if data is None:
         return None

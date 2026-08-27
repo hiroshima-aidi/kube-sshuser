@@ -35,7 +35,12 @@ python -c "from kube_sshuser.provision_manifest import build_manifest; ..."
 
 ## Architecture
 
-**副作用は全て `kubectl` サブプロセス経由。** Kubernetes Python クライアントは使わない。すべての外部実行は `common.run()` を通り、実行コマンドが `[cmd] ...` として stderr に出る。`check=True` での失敗は `common.KubectlError`（コマンド文字列・終了コード・stderr を保持）になり、`common.cli_main()` が各エントリポイントでそれを短いエラーメッセージに変換する。**この例外型は `provision_user.py` の NodePort 衝突リトライが判定に使う**ので、握り潰したり型を変えたりしないこと。JSON 取得は `common.kubectl_get_json()`（失敗時 None）。`status.py` と `terminate_pod.py` は同名のローカル関数を持つが、そちらは失敗時に例外を投げる点が異なる。
+**副作用は全て `kubectl` サブプロセス経由。** Kubernetes Python クライアントは使わない。すべての外部実行は `common.run()` を通り、実行コマンドが `[cmd] ...` として stderr に出る。`check=True` での失敗は `common.KubectlError`（コマンド文字列・終了コード・stderr を保持）になり、`common.cli_main()` が各エントリポイントでそれを短いエラーメッセージに変換する。**この例外型は `provision_user.py` の NodePort 衝突リトライが判定に使う**ので、握り潰したり型を変えたりしないこと。JSON 取得は **`common` の 2 本立て**で、名前で使い分けを強制している:
+
+- `kubectl_get_json()` — **失敗時 `None`**。「無いのが正常」な存在確認用（`doctor` / `delete_user` / `provision_kubectl`）。
+- `kubectl_get_json_or_raise()` — **失敗時 `KubectlError`**。取れないと続行できない箇所用（`status` / `terminate_pod`）。
+
+以前は `status.py` と `terminate_pod.py` が `kubectl_get_json` という**同名のローカル関数**を持ち、`common` 版と挙動が逆（例外 vs None）だった。Phase 1 で削除し `common` に寄せてある。ローカル版が投げていたのは素の `RuntimeError` で `cli_main()` に捕まらず traceback になっていたが、`KubectlError`（`RuntimeError` のサブクラス）に変わったので短いエラーメッセージと正しい終了コードになる。
 
 **kube-context は `common` のモジュール状態。** 各 `main()` の冒頭で `set_kube_context(args.kube_context)` を呼び、`run()` が `kubectl` 呼び出しに `--context` を注入する。新しいサブコマンドを足すときは `add_context_argument()` と `set_kube_context()` を忘れないこと。
 
@@ -58,13 +63,24 @@ python -c "from kube_sshuser.provision_manifest import build_manifest; ..."
 
 **マニフェストは f-string で生成する（YAML ライブラリではない）。** `provision_manifest.py` の `build_manifest()` が 1 本の複数ドキュメント YAML 文字列を返し、`kubectl apply -f -` に stdin で渡す。人間向けの表示名・説明はアノテーション（`provision-user.openai.local/display-name` / `.../description`）としてインデント指定つきで差し込まれる。値を埋め込む際は `json.dumps()` でクォートするのが既存の流儀。
 
-**識別に使うラベル/アノテーション**（複数モジュールにハードコードされているので変えるときは grep 必須）:
+**識別に使うラベル/アノテーションは `labels.py` に集約済み**（Phase 1）。以前は 6 モジュールに、しかも
+**形式まで違う 2 通り**（`"key=value"` のセレクタ文字列と、key / value 別定数）で散っていた。
 
-- `app.kubernetes.io/managed-by=provision-user` — `status` が管理対象 namespace を絞る基準
-- `app.kubernetes.io/name=ssh-user` + `provision-user.openai.local/user=<user>` — SSH Pod の特定
-- `provision-user.openai.local/display-name` / `.../description`
+- `MANAGED_NAMESPACE_SELECTOR` = `app.kubernetes.io/managed-by=provision-user` — 管理対象 namespace の基準
+- `SSH_APP_SELECTOR` = `app.kubernetes.io/name=ssh-user`、`USER_LABEL_KEY` — SSH Pod の特定
+- `DISPLAY_NAME_ANNOTATION` / `DESCRIPTION_ANNOTATION`
+- `user_selector(username)` — 管理対象 + ユーザの複合セレクタ
+
+`provision_manifest.py` の YAML テンプレートも f-string 内で定数を展開している。**値は一切変えていない**
+（`build_manifest()` の出力はバイト単位で一致することを確認済み）。`openai.local` の置換は Phase 6。
+定数化してあるので、そのときの変更は 1 ファイルで済む。
 
 **NodePort は自前で割り当てる。** `--port` 省略時は `get_used_nodeports()` が全 namespace の Service を舐めて 31000–31999 の空きを探す（`provision_kubectl.py`）。
+
+**`terminate --all` は namespace 内の全 Pod が対象で、SSH Pod も含む**（ラベルで絞っていない）。
+これは意図的: `--all` の help も「delete all pods in the namespace」で、SSH Pod は Deployment 配下なので
+自動で作り直される（学生の SSH セッションは切れる）。削除前に対象 Pod 一覧を JSON で表示してから
+確認プロンプトを出すので、`ssh-<user>` が並ぶことは実行者に見えている。
 
 **`modify` は Pod を再起動しない操作だけを扱う。** アノテーション更新 / ResourceQuota の patch / PVC の拡張（縮小不可）に限定されている。イメージ変更など再作成が要るものをここに足さないこと。
 

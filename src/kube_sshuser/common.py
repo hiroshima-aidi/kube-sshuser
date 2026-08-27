@@ -110,6 +110,13 @@ def run(cmd: Command, check: bool = True, capture_output: bool = True, input_tex
 
 
 def kubectl_get_json(cmd: Sequence[object]):
+    """Read JSON from kubectl, or None if the resource is absent / unreadable.
+
+    Use this only where "not there" is a normal answer (existence probes in
+    doctor / delete-user / provision). When a missing result means the command
+    cannot continue, use kubectl_get_json_or_raise instead -- silently getting
+    None there turns a cluster error into wrong output.
+    """
     result = run(cmd, check=False)
     if result.returncode != 0:
         return None
@@ -117,6 +124,18 @@ def kubectl_get_json(cmd: Sequence[object]):
         return json.loads(result.stdout)
     except json.JSONDecodeError:
         return None
+
+
+def kubectl_get_json_or_raise(cmd: Sequence[object]):
+    """Read JSON from kubectl, raising KubectlError on failure."""
+    result = run(cmd, check=False)
+    argv = " ".join(shlex.quote(part) for part in _with_context(cmd))
+    if result.returncode != 0:
+        raise KubectlError(argv, result.returncode, result.stderr or result.stdout)
+    try:
+        return json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise KubectlError(argv, 0, "failed to decode kubectl JSON output") from exc
 
 
 def resource_exists(kind: str, name: str, namespace: Optional[str] = None) -> bool:

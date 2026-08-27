@@ -5,10 +5,7 @@ import sys
 from pathlib import Path
 
 from kube_sshuser.common import kubectl_get_json, run
-
-
-USER_LABEL_KEY = "provision-user.openai.local/user"
-SSH_APP_LABEL = "app.kubernetes.io/name=ssh-user"
+from kube_sshuser.labels import SSH_APP_SELECTOR, USER_LABEL_KEY
 
 NODE_PORT_RANGE_START = 31000
 NODE_PORT_RANGE_END = 31999
@@ -75,7 +72,7 @@ def kubectl_get_pod_name(namespace: str, username: str) -> str:
             "get",
             "pods",
             "-l",
-            f"{SSH_APP_LABEL},{USER_LABEL_KEY}={username}",
+            f"{SSH_APP_SELECTOR},{USER_LABEL_KEY}={username}",
             "-o",
             "jsonpath={.items[0].metadata.name}",
         ]
