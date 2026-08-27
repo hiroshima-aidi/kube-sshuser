@@ -3,19 +3,88 @@ import argparse
 import shlex
 import subprocess
 import sys
+from typing import Optional
 
 
 DEFAULT_NAMESPACE = "jupyterhub"
 DEFAULT_RELEASE = "jupyterhub"
 DEFAULT_VALUES = "config.yaml"
 
+# Each tool spells "which cluster" differently. Keeping the mapping in one table
+# means adding a new tool (kustomize, flux, ...) is a one-line change instead of
+# another special case at the call site.
+CONTEXT_FLAGS = {
+    "kubectl": "--context",
+    "helm": "--kube-context",
+}
 
-def run(cmd: list[str], check: bool = True) -> int:
-    print(f"[CMD] {shlex.join(cmd)}")
-    proc = subprocess.run(cmd)
+_kube_context: Optional[str] = None
+_dry_run: bool = False
+
+
+def set_kube_context(context: Optional[str]) -> None:
+    global _kube_context
+    _kube_context = context
+
+
+def set_dry_run(dry_run: bool) -> None:
+    global _dry_run
+    _dry_run = dry_run
+
+
+def _with_context(cmd: list[str]) -> list[str]:
+    parts = [str(part) for part in cmd]
+    if not _kube_context or not parts:
+        return parts
+    flag = CONTEXT_FLAGS.get(parts[0])
+    if flag is None:
+        return parts
+    return [parts[0], flag, _kube_context, *parts[1:]]
+
+
+def run(
+    cmd: list[str],
+    check: bool = True,
+    input_text: Optional[str] = None,
+    note: Optional[str] = None,
+) -> int:
+    """Run one external command, echoing exactly what is executed.
+
+    `note` annotates the echoed argv when the command reads a manifest from stdin
+    and the argv alone would not say what is being applied.
+    """
+    argv = _with_context(cmd)
+    printable = " ".join(shlex.quote(part) for part in argv)
+    if note:
+        printable += f"  # {note}"
+
+    # [cmd]/[dry-run] go to stderr, progress goes to stdout; flush so the two
+    # streams stay in order when the output is captured to a file.
+    sys.stdout.flush()
+
+    if _dry_run:
+        print(f"[dry-run] {printable}", file=sys.stderr)
+        return 0
+
+    print(f"[cmd] {printable}", file=sys.stderr)
+    proc = subprocess.run(argv, input=input_text.encode() if input_text else None)
     if check and proc.returncode != 0:
         sys.exit(proc.returncode)
     return proc.returncode
+
+
+def confirm_typed_or_exit(expected: str, prompt: str, assume_yes: bool) -> None:
+    """Require the operator to type an exact string to proceed.
+
+    Exits non-zero when the input does not match, so a declined confirmation is
+    distinguishable from a completed run in scripts.
+    """
+    if assume_yes:
+        return
+    reply = input(f"{prompt}\nType '{expected}' to confirm: ").strip()
+    if reply != expected:
+        print("aborted (input did not match)", file=sys.stderr)
+        sys.exit(1)
 
 
 def prepull_images(namespace: str, images: list[str]) -> None:
@@ -48,8 +117,11 @@ spec:
       containers:
 {containers}
 """
-    print(f"[CMD] kubectl apply -f - (DaemonSet/{ds_name})")
-    subprocess.run(["kubectl", "apply", "-f", "-"], input=manifest.encode(), check=True)
+    run(
+        ["kubectl", "apply", "-f", "-"],
+        input_text=manifest,
+        note=f"DaemonSet/{ds_name}",
+    )
     run(["kubectl", "rollout", "status", f"daemonset/{ds_name}", "-n", namespace])
     run(["kubectl", "delete", "daemonset", ds_name, "-n", namespace, "--ignore-not-found"])
     print("[INFO] Pre-pull complete.")
@@ -81,13 +153,16 @@ def apply_config(args: argparse.Namespace) -> None:
 
 
 def refresh_user(args: argparse.Namespace) -> None:
+    pvc_name = f"claim-{args.username}"
+
     if args.full:
         print(f"[WARN] This will DELETE ALL DATA for user: {args.username}")
-        if not args.yes:
-            confirm = input("Are you sure? (yes/no): ").strip()
-            if confirm != "yes":
-                print("Cancelled.")
-                return
+        print(f"[WARN] PVC to be deleted: {pvc_name} (namespace: {args.namespace})")
+        confirm_typed_or_exit(
+            pvc_name,
+            f"This permanently destroys the contents of PVC {pvc_name}.",
+            args.yes,
+        )
 
     print(f"[INFO] Deleting pod for user: {args.username}")
     run([
@@ -102,7 +177,7 @@ def refresh_user(args: argparse.Namespace) -> None:
         run([
             "kubectl", "delete", "pvc",
             "-n", args.namespace,
-            f"claim-{args.username}",
+            pvc_name,
             "--ignore-not-found",
         ], check=False)
         print("[INFO] Done (environment fully reset)")
@@ -134,6 +209,17 @@ def main() -> None:
         "-n", "--namespace",
         default=DEFAULT_NAMESPACE,
         help=f"Kubernetes namespace (default: {DEFAULT_NAMESPACE})",
+    )
+    parser.add_argument(
+        "--context",
+        dest="kube_context",
+        default=None,
+        help="kubectl/helm context to use (default: current context)",
+    )
+    parser.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="print the commands that would run, without executing them",
     )
 
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -208,6 +294,8 @@ def main() -> None:
     p_pvc.set_defaults(func=pvc_list)
 
     args = parser.parse_args()
+    set_kube_context(args.kube_context)
+    set_dry_run(args.dry_run)
     args.func(args)
 
 
