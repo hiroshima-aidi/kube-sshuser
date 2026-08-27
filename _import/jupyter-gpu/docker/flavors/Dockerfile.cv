@@ -1,0 +1,15 @@
+# Example flavor image for computer vision utilities.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+USER root
+
+RUN pip install --no-cache-dir \
+    opencv-python-headless==4.10.0.84 \
+    albumentations==1.4.16 \
+    git+https://github.com/SwReliab/pysrat.git
+
+COPY scripts/install_reliab_julia_packages.jl /tmp/install_reliab_julia_packages.jl
+
+USER 1000
+RUN julia /tmp/install_reliab_julia_packages.jl

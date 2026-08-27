@@ -1,0 +1,2 @@
+# Keep GPU-specific Python packages here when needed.
+# PyTorch for CUDA is installed in Dockerfiles with the CUDA-specific index URL.

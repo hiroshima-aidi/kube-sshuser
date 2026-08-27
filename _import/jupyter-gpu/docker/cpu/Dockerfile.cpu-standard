@@ -1,0 +1,64 @@
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV SHELL=/bin/bash
+ENV NB_USER=jovyan
+ENV NB_UID=1000
+ENV NB_GID=100
+ENV JUPYTER_DATA_DIR=/usr/local/share/jupyter
+ENV JULIA_DEPOT_PATH=/opt/julia
+
+ARG JULIA_VERSION=1.10.11
+ARG WITH_IJULIA=1
+
+RUN apt-get update && apt-get install -y \
+    python3 \
+    python3-pip \
+    python3-venv \
+    python3-dev \
+    git \
+    curl \
+    ca-certificates \
+    tini \
+    sudo \
+    wget \
+    tar \
+    xz-utils \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN if ! getent group ${NB_GID} >/dev/null; then groupadd -g ${NB_GID} ${NB_USER}; fi && \
+    if ! id -u ${NB_USER} >/dev/null 2>&1; then useradd -m -s /bin/bash -N -u ${NB_UID} ${NB_USER}; fi && \
+    usermod -g ${NB_GID} ${NB_USER} && \
+    mkdir -p /home/${NB_USER}/work && \
+    chown -R ${NB_UID}:${NB_GID} /home/${NB_USER}
+
+RUN wget -q https://julialang-s3.julialang.org/bin/linux/x64/1.10/julia-${JULIA_VERSION}-linux-x86_64.tar.gz \
+    && tar -xzf julia-${JULIA_VERSION}-linux-x86_64.tar.gz -C /opt \
+    && ln -s /opt/julia-${JULIA_VERSION}/bin/julia /usr/local/bin/julia \
+    && rm julia-${JULIA_VERSION}-linux-x86_64.tar.gz
+
+RUN python3 -m pip install --no-cache-dir --upgrade pip setuptools wheel
+
+COPY requirements/python/common.txt /tmp/requirements-common.txt
+COPY requirements/python/cpu.txt /tmp/requirements-cpu.txt
+RUN pip install --no-cache-dir -r /tmp/requirements-common.txt \
+    && pip install --no-cache-dir -r /tmp/requirements-cpu.txt
+
+# Install Julia packages as non-root user (docker-stacks convention)
+# Pre-create the kernels dir so IJulia (build.jl) can write to JUPYTER_DATA_DIR directly
+COPY scripts/install_ijulia.jl /tmp/install_ijulia.jl
+RUN mkdir -p /opt/julia /usr/local/share/jupyter/kernels && \
+    chown -R ${NB_UID}:${NB_GID} /opt/julia && \
+    chown -R ${NB_UID}:${NB_GID} /usr/local/share/jupyter && \
+    chown ${NB_UID}:${NB_GID} /tmp/install_ijulia.jl
+USER ${NB_UID}
+RUN if [ "${WITH_IJULIA}" = "1" ]; then \
+      julia /tmp/install_ijulia.jl; \
+    fi
+
+WORKDIR /home/${NB_USER}
+USER ${NB_UID}
+
+EXPOSE 8888
+
+CMD ["tini", "-g", "--", "jupyter", "lab", "--ip=0.0.0.0", "--no-browser", "--ServerApp.allow_origin=*", "--ServerApp.token="]

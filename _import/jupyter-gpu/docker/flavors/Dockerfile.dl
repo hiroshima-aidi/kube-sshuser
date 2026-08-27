@@ -1,0 +1,16 @@
+# Example flavor image for deep learning utilities.
+# Build this by using cpu-standard or cuda-standard image as the base in your CI.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+
+USER root
+
+RUN pip install --no-cache-dir \
+    scikit-learn==1.5.2 \
+    seaborn==0.13.2 \
+    git+https://github.com/SwReliab/pysrat.git
+
+COPY scripts/install_reliab_julia_packages.jl /tmp/install_reliab_julia_packages.jl
+
+USER 1000
+RUN julia /tmp/install_reliab_julia_packages.jl
