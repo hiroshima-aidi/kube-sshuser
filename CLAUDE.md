@@ -108,14 +108,15 @@ env の値だけはエスケープ処理があるが、他のフィールドは�
 
 ## 未解決の食い違い
 
-- `Makefile` の `ADMIN_DIR`（`admin_tool/`）と `venv` / `admin-install` ターゲットは、
-  **もう存在しないディレクトリ**を指している（管理ツールは kube-sshuser へ分離済み）。
 - `gpu_dev.py:main()` の `env.pop("KUBECONFIG")` は、`entrypoint.sh` が `KUBECONFIG` を
   kubectl の既定パスと同じ `$HOME/.kube/config` に設定しているため**実質何もしていない**。
   sudo 運用の名残と思われる。
 
 ## 決着済み
 
+- **`Makefile` の残骸を削除した**（Phase 1）。`ADMIN_DIR` / `VENV` / `venv` / `admin-install`
+  / `clean-venv` は、もう存在しない `admin_tool/` を指していた。管理ツールは kube-sshuser へ
+  分離済み。`make -n` の出力は削除の前後で完全一致（＝ビルド挙動は不変）。
 - **`gpu-dev` は sudo ではなく通常ユーザで実行する。** owner を `$USER` から取り、
   kubeconfig が SSH ユーザの `$HOME` にあるため、sudo だと両方外れる。README の図から
   sudo を削り、`warn_if_root()` で root 実行時に警告を出すようにした。
